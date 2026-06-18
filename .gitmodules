@@ -1,0 +1,3 @@
+[submodule "Ext/CppLmmModelStore"]
+	path = Ext/CppLmmModelStore
+	url = https://github.com/cschladetsch/CppLmmModelStore
