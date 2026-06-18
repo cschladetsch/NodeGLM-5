@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>GLM-5.2 · Dev Console</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.5/babel.min.js"></script>
+<style>
+  /* ── design tokens ── */
+  :root {
+    --bg:        #0c0c0f;
+    --surface:   #13131a;
+    --raised:    #1b1b26;
+    --border:    #2a2a3d;
+    --accent:    #7c6af7;        /* periwinkle-violet: GLM's CHN-origin cool */
+    --accent2:   #34c8a0;        /* teal for REPL success */
+    --warn:      #e07060;
+    --text:      #ddddf4;
+    --muted:     #6868a8;
+    --mono:      'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+    --sans:      -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --radius:    6px;
+    --sidebar-w: 220px;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── header ── */
+  .header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    user-select: none;
+  }
+  .header-logo {
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -.5px;
+    color: var(--accent);
+  }
+  .header-model {
+    font-size: 11px;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
+  .header-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #444;
+    transition: background .4s;
+    margin-left: auto;
+  }
+  .header-dot.online  { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
+  .header-dot.error   { background: var(--warn); }
+  .header-status { font-size: 11px; color: var(--muted); }
+
+  /* ── tabs ── */
+  .tabs {
+    display: flex;
+    gap: 2px;
+    padding: 0 16px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .tab {
+    padding: 8px 16px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .5px;
+    color: var(--muted);
+    border-bottom: 2px solid transparent;
+    transition: color .15s, border-color .15s;
+    text-transform: uppercase;
+  }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .tab:hover:not(.active) { color: var(--text); }
+
+  /* ── layout ── */
+  .workspace {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── sidebar (file browser) ── */
+  .sidebar {
+    width: var(--sidebar-w);
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .sidebar-header {
+    padding: 8px 12px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .sidebar-path {
+    padding: 4px 12px;
+    font-size: 10px;
+    font-family: var(--mono);
+    color: var(--muted);
+    background: var(--raised);
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sidebar-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 4px 0;
+  }
+  .sidebar-entry {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    cursor: pointer;
+    font-size: 12px;
+    font-family: var(--mono);
+    color: var(--text);
+    transition: background .1s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sidebar-entry:hover { background: var(--raised); }
+  .sidebar-entry.selected { background: #2020358f; color: var(--accent); }
+  .sidebar-entry .icon { opacity: .7; font-size: 11px; flex-shrink: 0; }
+  .sidebar-entry .name { overflow: hidden; text-overflow: ellipsis; }
+  .sidebar-entry .size { margin-left: auto; font-size: 10px; color: var(--muted); flex-shrink: 0; }
+  .sidebar-back {
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  /* ── main panel ── */
+  .main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* ── CHAT ── */
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .msg {
+    display: flex;
+    gap: 12px;
+    max-width: 860px;
+    width: 100%;
+    align-self: flex-start;
+  }
+  .msg.user { align-self: flex-end; flex-direction: row-reverse; }
+  .msg-avatar {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+    background: var(--accent);
+    color: #fff;
+  }
+  .msg.user .msg-avatar { background: var(--raised); color: var(--muted); }
+  .msg-body {
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 10px 14px;
+    line-height: 1.6;
+    max-width: 78%;
+  }
+  .msg.user .msg-body {
+    background: #20203a;
+    border-color: #3535608f;
+  }
+  .msg-body pre {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 10px 12px;
+    margin: 8px 0;
+    overflow-x: auto;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.5;
+  }
+  .msg-body code {
+    font-family: var(--mono);
+    font-size: 12px;
+    background: #1a1a2e;
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  .msg-body pre code { background: transparent; padding: 0; }
+  .thinking {
+    font-size: 11px;
+    color: var(--muted);
+    font-style: italic;
+    border-left: 2px solid var(--border);
+    padding-left: 8px;
+    margin-bottom: 8px;
+  }
+  .msg-meta {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 4px;
+    font-family: var(--mono);
+  }
+
+  /* file injection pill */
+  .file-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: #1e1e30;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 2px 8px;
+    font-size: 11px;
+    font-family: var(--mono);
+    color: var(--accent);
+    margin-bottom: 8px;
+    cursor: default;
+  }
+  .file-pill button {
+    background: none; border: none; color: var(--warn);
+    cursor: pointer; padding: 0 2px; font-size: 13px; line-height: 1;
+  }
+
+  /* ── chat input ── */
+  .chat-input-area {
+    padding: 12px 24px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .chat-input-files {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+    min-height: 0;
+  }
+  .chat-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+  }
+  .chat-input-row textarea {
+    flex: 1;
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    padding: 10px 14px;
+    resize: none;
+    outline: none;
+    min-height: 44px;
+    max-height: 180px;
+    transition: border-color .15s;
+    line-height: 1.5;
+  }
+  .chat-input-row textarea:focus { border-color: var(--accent); }
+  .btn {
+    padding: 10px 16px;
+    border-radius: var(--radius);
+    border: none;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+    transition: opacity .15s, background .15s;
+  }
+  .btn:disabled { opacity: .4; cursor: default; }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:not(:disabled):hover { opacity: .85; }
+  .btn-ghost { background: var(--raised); color: var(--text); border: 1px solid var(--border); }
+  .btn-ghost:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
+
+  /* effort selector */
+  .effort-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .effort-label { font-size: 11px; color: var(--muted); }
+  .effort-btn {
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: none;
+    color: var(--muted);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+  .effort-btn.active { border-color: var(--accent); color: var(--accent); background: #2020388f; }
+
+  /* ── REPL tab ── */
+  .repl-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .repl-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .repl-cwd {
+    font-size: 11px;
+    font-family: var(--mono);
+    color: var(--muted);
+    flex: 1;
+  }
+  .repl-output {
+    flex: 1;
+    overflow-y: auto;
+    padding: 12px 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.6;
+    background: var(--bg);
+  }
+  .repl-line { display: flex; gap: 8px; }
+  .repl-line.cmd  { color: var(--accent2); margin-top: 6px; }
+  .repl-line.out  { color: var(--text); }
+  .repl-line.err  { color: var(--warn); }
+  .repl-line.info { color: var(--muted); font-style: italic; }
+  .repl-prompt { color: var(--muted); }
+  .repl-input-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .repl-input-row input {
+    flex: 1;
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 8px 12px;
+    outline: none;
+    transition: border-color .15s;
+  }
+  .repl-input-row input:focus { border-color: var(--accent2); }
+
+  /* ── FILE VIEWER ── */
+  .file-viewer {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .file-viewer-header {
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .file-viewer-content {
+    flex: 1;
+    overflow: auto;
+    background: var(--bg);
+    padding: 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    line-height: 1.7;
+    white-space: pre;
+    color: var(--text);
+  }
+  .file-viewer-empty {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    font-size: 13px;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .file-viewer-empty .big { font-size: 32px; }
+
+  /* scrollbars */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+
+  /* inline markdown rendering */
+  .md-h1,.md-h2,.md-h3 { font-weight: 700; margin: 8px 0 4px; line-height: 1.3; }
+  .md-h1 { font-size: 18px; }
+  .md-h2 { font-size: 15px; }
+  .md-h3 { font-size: 13px; }
+  .md-p  { margin: 4px 0; }
+  .md-ul { padding-left: 20px; margin: 4px 0; }
+  .md-li { margin: 2px 0; }
+  .md-hr { border: none; border-top: 1px solid var(--border); margin: 10px 0; }
+  .md-blockquote { border-left: 3px solid var(--accent); padding-left: 10px; color: var(--muted); margin: 6px 0; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useRef, useCallback } = React;
+
+const API = 'http://localhost:3001';
+
+// ── tiny markdown renderer ──────────────────────────────────────────────────
+function renderMarkdown(text) {
+  if (!text) return null;
+  const lines = text.split('\n');
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+
+    if (line.startsWith('```')) {
+      const lang = line.slice(3).trim();
+      const code = [];
+      i++;
+      while (i < lines.length && !lines[i].startsWith('```')) {
+        code.push(lines[i]); i++;
+      }
+      out.push(<pre key={i}><code>{code.join('\n')}</code></pre>);
+    } else if (line.startsWith('### ')) {
+      out.push(<div key={i} className="md-h3">{inline(line.slice(4))}</div>);
+    } else if (line.startsWith('## ')) {
+      out.push(<div key={i} className="md-h2">{inline(line.slice(3))}</div>);
+    } else if (line.startsWith('# ')) {
+      out.push(<div key={i} className="md-h1">{inline(line.slice(2))}</div>);
+    } else if (line.startsWith('> ')) {
+      out.push(<div key={i} className="md-blockquote">{inline(line.slice(2))}</div>);
+    } else if (line.startsWith('- ') || line.startsWith('* ')) {
+      const items = [];
+      while (i < lines.length && (lines[i].startsWith('- ') || lines[i].startsWith('* '))) {
+        items.push(<li key={i} className="md-li">{inline(lines[i].slice(2))}</li>);
+        i++;
+      }
+      out.push(<ul key={`ul${i}`} className="md-ul">{items}</ul>);
+      continue;
+    } else if (line.trim() === '---') {
+      out.push(<hr key={i} className="md-hr"/>);
+    } else if (line.trim() === '') {
+      out.push(<br key={i}/>);
+    } else {
+      out.push(<div key={i} className="md-p">{inline(line)}</div>);
+    }
+    i++;
+  }
+  return out;
+}
+
+function inline(text) {
+  const parts = text.split(/(`[^`]+`|\*\*[^*]+\*\*|\*[^*]+\*)/g);
+  return parts.map((p, i) => {
+    if (p.startsWith('**') && p.endsWith('**')) return <strong key={i}>{p.slice(2,-2)}</strong>;
+    if (p.startsWith('*') && p.endsWith('*'))   return <em key={i}>{p.slice(1,-1)}</em>;
+    if (p.startsWith('`') && p.endsWith('`'))   return <code key={i}>{p.slice(1,-1)}</code>;
+    return p;
+  });
+}
+
+// ── file size formatter ────────────────────────────────────────────────────
+function fmt(bytes) {
+  if (bytes == null) return '';
+  if (bytes < 1024) return bytes + 'B';
+  if (bytes < 1024*1024) return (bytes/1024).toFixed(1) + 'K';
+  return (bytes/(1024*1024)).toFixed(1) + 'M';
+}
+
+// ── FileBrowser sidebar ────────────────────────────────────────────────────
+function FileBrowser({ onInject, onOpenFile }) {
+  const [curPath, setCurPath] = useState('');
+  const [entries, setEntries] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [err, setErr] = useState(null);
+
+  const load = useCallback((p) => {
+    setErr(null);
+    fetch(`${API}/api/fs/list?path=${encodeURIComponent(p)}`)
+      .then(r => r.json())
+      .then(d => { if (d.error) { setErr(d.error); } else { setEntries(d.entries); setCurPath(d.path); } })
+      .catch(e => setErr(e.message));
+  }, []);
+
+  useEffect(() => { load(''); }, [load]);
+
+  const handleClick = (e) => {
+    if (e.type === 'dir') {
+      load(curPath === '.' ? e.name : `${curPath}/${e.name}`);
+    } else {
+      const fp = curPath === '.' ? e.name : `${curPath}/${e.name}`;
+      setSelected(fp);
+      onOpenFile(fp);
+    }
+  };
+
+  const goUp = () => {
+    const parts = curPath.split('/').filter(Boolean);
+    parts.pop();
+    load(parts.join('/') || '');
+  };
+
+  return (
+    <div className="sidebar">
+      <div className="sidebar-header">📁 Files</div>
+      <div className="sidebar-path" title={curPath}>~/{curPath}</div>
+      {err && <div style={{padding:'8px 12px',color:'var(--warn)',fontSize:11}}>{err}</div>}
+      <div className="sidebar-list">
+        {curPath && curPath !== '.' && (
+          <div className="sidebar-entry sidebar-back" onClick={goUp}>
+            <span className="icon">↑</span>
+            <span className="name">..</span>
+          </div>
+        )}
+        {entries.map(e => (
+          <div
+            key={e.name}
+            className={`sidebar-entry${selected === (curPath==='.'?e.name:`${curPath}/${e.name}`) ? ' selected' : ''}`}
+            onClick={() => handleClick(e)}
+            title={e.name}
+          >
+            <span className="icon">{e.type === 'dir' ? '📂' : '📄'}</span>
+            <span className="name">{e.name}</span>
+            {e.type === 'file' && <span className="size">{fmt(e.size)}</span>}
+          </div>
+        ))}
+        {entries.length === 0 && !err && (
+          <div style={{padding:'8px 12px',color:'var(--muted)',fontSize:11}}>Empty</div>
+        )}
+      </div>
+      {selected && (
+        <div style={{padding:'8px', borderTop:'1px solid var(--border)', display:'flex', gap:6}}>
+          <button className="btn btn-ghost" style={{flex:1,fontSize:11,padding:'6px 8px'}}
+            onClick={() => onInject(selected)}>
+            ↗ Inject to chat
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── REPL panel ─────────────────────────────────────────────────────────────
+function ReplPanel({ cwd }) {
+  const [lines, setLines] = useState([{ type:'info', text:'Shell REPL — enter commands to run locally.' }]);
+  const [input, setInput] = useState('');
+  const [running, setRunning] = useState(false);
+  const [history, setHistory] = useState([]);
+  const [histIdx, setHistIdx] = useState(-1);
+  const [replCwd, setReplCwd] = useState(cwd || '');
+  const outputRef = useRef(null);
+
+  useEffect(() => {
+    if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight;
+  }, [lines]);
+
+  const run = async (cmd) => {
+    if (!cmd.trim()) return;
+    setHistory(h => [cmd, ...h.slice(0,49)]);
+    setHistIdx(-1);
+    setLines(l => [...l, { type:'cmd', text: cmd }]);
+    setRunning(true);
+    try {
+      const r = await fetch(`${API}/api/repl/exec`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cmd, cwd: replCwd, timeout: 15000 }),
+      });
+      const d = await r.json();
+      if (d.stdout) d.stdout.split('\n').filter(Boolean).forEach(l => setLines(ls => [...ls, { type:'out', text: l }]));
+      if (d.stderr) d.stderr.split('\n').filter(Boolean).forEach(l => setLines(ls => [...ls, { type:'err', text: l }]));
+      setLines(ls => [...ls, { type:'info', text: `exit ${d.exitCode}` }]);
+      // track cd
+      if (cmd.trim().startsWith('cd ')) {
+        const dir = cmd.trim().slice(3).trim();
+        setReplCwd(p => dir.startsWith('/') ? dir : (p ? `${p}/${dir}` : dir));
+      }
+    } catch(e) {
+      setLines(ls => [...ls, { type:'err', text: e.message }]);
+    }
+    setRunning(false);
+  };
+
+  const onKey = (e) => {
+    if (e.key === 'Enter') { run(input); setInput(''); }
+    else if (e.key === 'ArrowUp') {
+      const idx = Math.min(histIdx+1, history.length-1);
+      setHistIdx(idx); setInput(history[idx] || '');
+    } else if (e.key === 'ArrowDown') {
+      const idx = Math.max(histIdx-1, -1);
+      setHistIdx(idx); setInput(idx === -1 ? '' : history[idx]);
+    }
+  };
+
+  return (
+    <div className="repl-panel">
+      <div className="repl-toolbar">
+        <span style={{fontSize:13}}>⚡</span>
+        <span className="repl-cwd">{replCwd || '~'}</span>
+        <button className="btn btn-ghost" style={{fontSize:11,padding:'4px 8px'}}
+          onClick={() => setLines([{ type:'info', text:'Cleared.' }])}>
+          Clear
+        </button>
+      </div>
+      <div className="repl-output" ref={outputRef}>
+        {lines.map((l, i) => (
+          <div key={i} className={`repl-line ${l.type}`}>
+            {l.type === 'cmd' && <span className="repl-prompt">$</span>}
+            <span>{l.text}</span>
+          </div>
+        ))}
+        {running && <div className="repl-line info"><span className="repl-prompt">▶</span><span>running…</span></div>}
+      </div>
+      <div className="repl-input-row">
+        <span style={{color:'var(--accent2)',fontFamily:'var(--mono)',fontSize:13}}>$</span>
+        <input
+          value={input}
+          onChange={e => setInput(e.target.value)}
+          onKeyDown={onKey}
+          placeholder="enter command…"
+          disabled={running}
+          autoFocus
+        />
+        <button className="btn btn-ghost" style={{fontSize:12,padding:'7px 12px'}}
+          onClick={() => { run(input); setInput(''); }}
+          disabled={running || !input.trim()}>
+          Run
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── File viewer panel ───────────────────────────────────────────────────────
+function FileViewerPanel({ filePath }) {
+  const [content, setContent] = useState(null);
+  const [err, setErr] = useState(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!filePath) { setContent(null); setErr(null); return; }
+    setLoading(true); setErr(null); setContent(null);
+    fetch(`${API}/api/fs/read?path=${encodeURIComponent(filePath)}`)
+      .then(r => r.json())
+      .then(d => { if (d.error) setErr(d.error); else setContent(d.content); })
+      .catch(e => setErr(e.message))
+      .finally(() => setLoading(false));
+  }, [filePath]);
+
+  if (!filePath) return (
+    <div className="file-viewer-empty">
+      <span className="big">📂</span>
+      <span>Select a file to view</span>
+    </div>
+  );
+
+  return (
+    <div className="file-viewer">
+      <div className="file-viewer-header">
+        <span>📄</span>
+        <span style={{flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{filePath}</span>
+        {content != null && <span style={{fontSize:10}}>{content.split('\n').length} lines</span>}
+      </div>
+      {loading && <div className="file-viewer-empty"><span>Loading…</span></div>}
+      {err && <div className="file-viewer-empty" style={{color:'var(--warn)'}}><span>{err}</span></div>}
+      {content != null && <div className="file-viewer-content">{content}</div>}
+    </div>
+  );
+}
+
+// ── Chat panel ─────────────────────────────────────────────────────────────
+function ChatPanel({ injectedFile, onClearInject }) {
+  const [messages, setMessages] = useState([
+    { role:'assistant', content:'GLM-5.2 ready. Ask anything or inject a local file to discuss it.' }
+  ]);
+  const [input, setInput] = useState('');
+  const [streaming, setStreaming] = useState(false);
+  const [effort, setEffort] = useState('max');
+  const [attachedFiles, setAttachedFiles] = useState([]);
+  const messagesEndRef = useRef(null);
+  const taRef = useRef(null);
+
+  useEffect(() => {
+    if (injectedFile) {
+      setAttachedFiles(f => f.includes(injectedFile) ? f : [...f, injectedFile]);
+      onClearInject();
+    }
+  }, [injectedFile]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  // auto-grow textarea
+  useEffect(() => {
+    if (taRef.current) {
+      taRef.current.style.height = 'auto';
+      taRef.current.style.height = Math.min(taRef.current.scrollHeight, 180) + 'px';
+    }
+  }, [input]);
+
+  const removeFile = (f) => setAttachedFiles(files => files.filter(x => x !== f));
+
+  const send = async () => {
+    if (!input.trim() && attachedFiles.length === 0) return;
+    if (streaming) return;
+
+    // build context from attached files
+    let context = '';
+    for (const fp of attachedFiles) {
+      try {
+        const r = await fetch(`${API}/api/fs/read?path=${encodeURIComponent(fp)}`);
+        const d = await r.json();
+        if (d.content) context += `\n\n<file path="${fp}">\n${d.content.slice(0,8000)}\n</file>`;
+      } catch {}
+    }
+
+    const userContent = context ? `${input}\n${context}` : input;
+    const userMsg = { role:'user', content: userContent };
+    const displayMsg = { role:'user', content: input, files: [...attachedFiles] };
+
+    setMessages(m => [...m, displayMsg]);
+    setInput('');
+    setAttachedFiles([]);
+
+    // build API messages (use actual content with file context)
+    const apiMessages = [
+      ...messages.filter(m => m.role !== 'system').map(m => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : m.content
+      })),
+      userMsg
+    ];
+
+    setStreaming(true);
+    const assistantMsg = { role:'assistant', content:'', thinking:'' };
+    setMessages(m => [...m, assistantMsg]);
+
+    try {
+      const res = await fetch(`${API}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: apiMessages,
+          reasoning_effort: effort === 'max' ? 'max' : 'high',
+        }),
+      });
+
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (raw === '[DONE]') continue;
+          try {
+            const obj = JSON.parse(raw);
+            const delta = obj.choices?.[0]?.delta;
+            if (!delta) continue;
+            if (delta.reasoning_content) {
+              setMessages(m => {
+                const copy = [...m];
+                copy[copy.length-1] = { ...copy[copy.length-1], thinking: (copy[copy.length-1].thinking||'') + delta.reasoning_content };
+                return copy;
+              });
+            }
+            if (delta.content) {
+              setMessages(m => {
+                const copy = [...m];
+                copy[copy.length-1] = { ...copy[copy.length-1], content: copy[copy.length-1].content + delta.content };
+                return copy;
+              });
+            }
+          } catch {}
+        }
+      }
+    } catch(e) {
+      setMessages(m => {
+        const copy = [...m];
+        copy[copy.length-1] = { ...copy[copy.length-1], content:`Error: ${e.message}` };
+        return copy;
+      });
+    }
+    setStreaming(false);
+  };
+
+  const onKeyDown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+
+  const clearChat = () => setMessages([
+    { role:'assistant', content:'Chat cleared.' }
+  ]);
+
+  return (
+    <div className="main">
+      <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 24px',borderBottom:'1px solid var(--border)',background:'var(--surface)',fontSize:12,color:'var(--muted)',flexShrink:0}}>
+        <span>GLM-5.2 · 1M context · MIT</span>
+        <span style={{marginLeft:'auto'}}></span>
+        <button className="btn btn-ghost" style={{fontSize:11,padding:'3px 8px'}} onClick={clearChat}>Clear</button>
+      </div>
+
+      <div className="chat-messages">
+        {messages.map((msg, i) => (
+          <div key={i} className={`msg ${msg.role}`}>
+            <div className="msg-avatar">{msg.role === 'user' ? 'U' : 'G'}</div>
+            <div>
+              {msg.files && msg.files.length > 0 && (
+                <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:6}}>
+                  {msg.files.map(f => (
+                    <span key={f} className="file-pill">📄 {f.split('/').pop()}</span>
+                  ))}
+                </div>
+              )}
+              <div className="msg-body">
+                {msg.thinking && (
+                  <div className="thinking">
+                    <strong>Thinking…</strong>
+                    {msg.thinking.length > 200
+                      ? <div>{msg.thinking.slice(0,200)}…</div>
+                      : <div>{msg.thinking}</div>
+                    }
+                  </div>
+                )}
+                {renderMarkdown(msg.content)}
+                {msg.role === 'assistant' && streaming && i === messages.length-1 && !msg.content && (
+                  <span style={{color:'var(--muted)'}}>▌</span>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
+        <div ref={messagesEndRef}/>
+      </div>
+
+      <div className="chat-input-area">
+        {attachedFiles.length > 0 && (
+          <div className="chat-input-files">
+            {attachedFiles.map(f => (
+              <span key={f} className="file-pill">
+                📄 {f.split('/').pop()}
+                <button onClick={() => removeFile(f)}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
+        <div className="chat-input-row">
+          <textarea
+            ref={taRef}
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Message GLM-5.2… (Shift+Enter for newline)"
+            disabled={streaming}
+            rows={1}
+          />
+          <button className="btn btn-primary" onClick={send} disabled={streaming || (!input.trim() && attachedFiles.length===0)}>
+            {streaming ? '…' : '↑'}
+          </button>
+        </div>
+        <div className="effort-row">
+          <span className="effort-label">Thinking:</span>
+          {['max','high','off'].map(e => (
+            <button key={e} className={`effort-btn${effort===e?' active':''}`} onClick={()=>setEffort(e)}>{e}</button>
+          ))}
+          <span className="effort-label" style={{marginLeft:8}}>
+            {effort==='max'?'Full reasoning':''}
+            {effort==='high'?'High (faster)':''}
+            {effort==='off'?'No thinking':''}
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Root App ───────────────────────────────────────────────────────────────
+function App() {
+  const [tab, setTab]           = useState('chat');
+  const [status, setStatus]     = useState('checking');
+  const [injectedFile, setInj]  = useState(null);
+  const [viewFile, setViewFile] = useState(null);
+
+  useEffect(() => {
+    const check = () => {
+      fetch(`${API}/api/health`)
+        .then(r => r.json())
+        .then(() => setStatus('online'))
+        .catch(() => setStatus('error'));
+    };
+    check();
+    const t = setInterval(check, 8000);
+    return () => clearInterval(t);
+  }, []);
+
+  const injectToChat = (fp) => {
+    setInj(fp);
+    setTab('chat');
+  };
+
+  return (
+    <>
+      <div className="header">
+        <span className="header-logo">GLM</span>
+        <span className="header-model">5.2 · local</span>
+        <span className="header-dot" style={{background: status==='online'?'var(--accent2)': status==='error'?'var(--warn)':'#555', boxShadow: status==='online'?'0 0 6px var(--accent2)':undefined }}/>
+        <span className="header-status">{status}</span>
+      </div>
+
+      <div className="tabs">
+        {['chat','repl','files'].map(t => (
+          <div key={t} className={`tab${tab===t?' active':''}`} onClick={()=>setTab(t)}>
+            {t==='chat'?'💬 Chat': t==='repl'?'⚡ REPL':'📂 Files'}
+          </div>
+        ))}
+      </div>
+
+      <div className="workspace">
+        <FileBrowser onInject={injectToChat} onOpenFile={setViewFile}/>
+
+        <div className="main">
+          {tab === 'chat'  && <ChatPanel injectedFile={injectedFile} onClearInject={()=>setInj(null)}/>}
+          {tab === 'repl'  && <ReplPanel/>}
+          {tab === 'files' && <FileViewerPanel filePath={viewFile}/>}
+        </div>
+      </div>
+    </>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>

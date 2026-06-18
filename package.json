@@ -1,0 +1,15 @@
+{
+  "name": "glm-repl-server",
+  "version": "1.0.0",
+  "description": "GLM-5.2 local dev server: chat proxy + filesystem + REPL",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "GLM_BASE_URL=http://localhost:30000 SAFE_ROOT=$HOME node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "ws": "^8.17.0"
+  }
+}
