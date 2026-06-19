@@ -2,11 +2,14 @@
 # glm-code — agentic coding assistant, GLM-4 9B local
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DIR="$HOME/local/repos/glm-code"
 MODEL="glm4:9b"
 OLLAMA_PORT=11434
 NODE_PORT=3001
 MS_DIR="$HOME/local/repos/CppLmmModelStore"
+KAI_DIR="$SCRIPT_DIR/Ext/CppKAI"
+ENET_DIR="$SCRIPT_DIR/Ext/ENet"
 
 G="\033[32m"; B="\033[34m"; R="\033[31m"; X="\033[0m"
 ok()   { echo -e "${G}✓${X} $*"; }
@@ -50,8 +53,36 @@ else
   ok "ModelStore already built"
 fi
 
+# ── CppKAI ─────────────────────────────────────────────────────────────────
+[ -e "$KAI_DIR/.git" ] || die "CppKAI submodule missing. Run: git submodule update --init Ext/CppKAI"
+[ -e "$ENET_DIR/.git" ] || die "ENet submodule missing. Run: git submodule update --init Ext/ENet"
+git -C "$KAI_DIR" submodule update --init --recursive \
+  Ext/CppKaiCore Ext/CppKaiLanguage Ext/imgui
+
+# CppKAI declares ENet but does not pin an Ext/ENet gitlink at this revision.
+# NodeGLM pins it as a sibling submodule and exposes it at CppKAI's expected path.
+KAI_ENET="$KAI_DIR/Ext/ENet"
+if [ ! -e "$KAI_ENET" ]; then
+  ln -s "$ENET_DIR" "$KAI_ENET"
+elif [ ! -f "$KAI_ENET/CMakeLists.txt" ]; then
+  die "CppKAI ENet path exists but is not an ENet checkout: $KAI_ENET"
+fi
+
+KAI_CONSOLE="$KAI_DIR/Bin/Console"
+KAI_NETWORK_STAMP="$KAI_DIR/build/.nodeglm-enet"
+if [ ! -x "$KAI_CONSOLE" ] || [ ! -f "$KAI_NETWORK_STAMP" ]; then
+  info "Building CppKAI Console with ENet…"
+  cmake -S "$KAI_DIR" -B "$KAI_DIR/build" -DCMAKE_BUILD_TYPE=Release \
+    -DKAI_BUILD_TEST_ALL=OFF -DKAI_BUILD_CORE_TEST=OFF \
+    -DKAI_BUILD_TEST_LANG=OFF -DKAI_NETWORKING=ON -DKAI_BUILD_IMGUI=OFF
+  cmake --build "$KAI_DIR/build" --target Console --parallel "$(nproc)"
+  touch "$KAI_NETWORK_STAMP"
+fi
+ok "CppKAI Console ready (ENet networking enabled)"
+
 # ── Node.js ────────────────────────────────────────────────────────────────
 command -v node &>/dev/null || die "Node.js not found."
+command -v script &>/dev/null || die "util-linux 'script' is required for colored CppKAI consoles."
 ok "Node $(node --version)"
 
 # ── App files ──────────────────────────────────────────────────────────────
@@ -64,7 +95,7 @@ PKGJSON
 # ── server.js ──────────────────────────────────────────────────────────────
 cat > server.js << 'SERVERJS'
 const express=require('express'),cors=require('cors'),fs=require('fs'),path=require('path'),os=require('os'),http=require('http');
-const {exec}=require('child_process');
+const {exec,spawn}=require('child_process');
 const {WebSocketServer}=require('ws');
 const Diff=require('diff');
 
@@ -77,9 +108,25 @@ const ROOT  =process.env.SAFE_ROOT   ||process.env.HOME||'/tmp';
 const PORT  =process.env.PORT        ||3001;
 const MODEL =process.env.GLM_MODEL   ||'glm4:9b';
 const MS_DIR=process.env.MS_DIR      ||path.join(os.homedir(),'local/repos/CppLmmModelStore');
+const KAI_DIR=process.env.KAI_DIR;
+const KAI_CONSOLE=process.env.KAI_CONSOLE;
 
 const sessions={};
-function sess(sid){if(!sessions[sid])sessions[sid]={cwd:ROOT};return sessions[sid];}
+function sess(sid){if(!sessions[sid])sessions[sid]={cwd:ROOT,bashHistory:[]};return sessions[sid];}
+function expandBangBang(command,previous){
+  let result='',single=false,expanded=false;
+  for(let i=0;i<command.length;i++){
+    const char=command[i];
+    if(char==='\\'&&i+1<command.length){result+=char+command[++i];continue;}
+    if(char==="'"){single=!single;result+=char;continue;}
+    if(!single&&char==='!'&&command[i+1]==='!'){
+      if(!previous)return {error:'!!: event not found'};
+      result+=previous;i++;expanded=true;continue;
+    }
+    result+=char;
+  }
+  return {command:result,expanded};
+}
 function safe(p){
   const abs=path.resolve(ROOT,(p||'').replace(/^~/,os.homedir()));
   if(!abs.startsWith(ROOT))throw new Error('Outside sandbox');
@@ -164,17 +211,25 @@ app.post('/api/tool/bash',async(req,res)=>{
   const{cmd,sid}=req.body;
   if(!cmd)return res.status(400).json({error:'cmd required'});
   const s=sess(sid||'default');
-  const cdm=cmd.trim().match(/^cd(?:\s+(.+))?$/);
+  const original=cmd.trim();
+  const expansion=expandBangBang(original,s.bashHistory.at(-1));
+  if(expansion.error)return res.json({stdout:'',stderr:expansion.error,exitCode:1,cwd:s.cwd});
+  const command=expansion.command;
+  s.bashHistory.push(command);
+  if(s.bashHistory.length>1000)s.bashHistory.shift();
+  const expanded=expansion.expanded?command:null;
+  if(command==='cwd')return res.json({stdout:s.cwd+'\n',stderr:'',exitCode:0,cwd:s.cwd,expanded});
+  const cdm=command.match(/^cd(?:\s+(.+))?$/);
   if(cdm){
     const tgt=(cdm[1]||'~').replace(/^~/,os.homedir());
     const resolved=path.resolve(s.cwd,tgt);
     try{
       if(!fs.statSync(resolved).isDirectory())throw new Error('not a directory');
-      s.cwd=resolved;return res.json({stdout:'',stderr:'',exitCode:0,cwd:s.cwd});
-    }catch{return res.json({stdout:'',stderr:`cd: ${tgt}: no such directory`,exitCode:1,cwd:s.cwd});}
+      s.cwd=resolved;return res.json({stdout:'',stderr:'',exitCode:0,cwd:s.cwd,expanded});
+    }catch{return res.json({stdout:'',stderr:`cd: ${tgt}: no such directory`,exitCode:1,cwd:s.cwd,expanded});}
   }
-  const r=await run(cmd,s.cwd);
-  res.json({...r,cwd:s.cwd});
+  const r=await run(command,s.cwd);
+  res.json({...r,cwd:s.cwd,expanded});
 });
 
 app.post('/api/tool/read_file',(req,res)=>{
@@ -220,9 +275,44 @@ app.get('/api/fs/read',(req,res)=>{
   }catch(e){res.status(400).json({error:e.message});}
 });
 
+app.post('/api/fs/write',(req,res)=>{
+  try{
+    const abs=safe(req.body.path);
+    fs.writeFileSync(abs,req.body.content,'utf8');
+    res.json({ok:true,path:abs});
+  }catch(e){res.status(400).json({error:e.message});}
+});
+
 app.get('/api/health',(_,res)=>res.json({ok:true,model:MODEL,ollama:OLLAMA,root:ROOT}));
 
 const server=http.createServer(app);
+const kaiWss=new WebSocketServer({server,path:'/api/kai'});
+kaiWss.on('connection',ws=>{
+  let proc=null;
+  const send=(type,data)=>{if(ws.readyState===1)ws.send(JSON.stringify({type,data}));};
+  ws.on('message',raw=>{
+    let msg;
+    try{msg=JSON.parse(raw.toString());}catch{return send('error','Invalid request');}
+    if(msg.type==='start'&&!proc){
+      const mode=['pi','rho','debugger'].includes(msg.mode)?msg.mode:'pi';
+      if(!KAI_CONSOLE||!fs.existsSync(KAI_CONSOLE))return send('error','CppKAI Console is not built');
+      const args=mode==='debugger'?['-l','pi','-t','5','--verbose']:['-l',mode];
+      const quote=value=>`'${String(value).replace(/'/g,"'\\''")}'`;
+      const command=[KAI_CONSOLE,...args].map(quote).join(' ');
+      proc=spawn('script',['-qefc',command,'/dev/null'],{cwd:KAI_DIR,env:{...process.env,TERM:'xterm-256color'},stdio:['pipe','pipe','pipe']});
+      proc.stdout.on('data',data=>send('stdout',data.toString()));
+      proc.stderr.on('data',data=>send('stderr',data.toString()));
+      proc.on('error',error=>send('error',error.message));
+      proc.on('close',code=>{send('exit',code);proc=null;});
+      send('ready',mode);
+    }else if(msg.type==='input'&&proc){
+      proc.stdin.write(String(msg.data||'')+'\n');
+    }else if(msg.type==='stop'&&proc){
+      proc.kill('SIGTERM');proc=null;
+    }
+  });
+  ws.on('close',()=>{if(proc)proc.kill('SIGTERM');});
+});
 server.listen(PORT,()=>console.log(`  glm-code :${PORT}  model=${MODEL}  root=${ROOT}`));
 SERVERJS
 
@@ -236,6 +326,7 @@ cat > index.html << 'INDEXHTML'
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.5/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.36.5/ace.js"></script>
 <style>
 :root{--bg:#0a0a0d;--sf:#111116;--ra:#18181f;--bd:#252535;--ac:#7c6af7;--g:#2dd4a0;--w:#f06060;--y:#f0c060;--tx:#e0e0f0;--mu:#555588;--mo:'JetBrains Mono','Fira Code',monospace;--sa:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--r:5px}
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -253,7 +344,7 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sa);font-size:13px;d
 .layout{display:flex;flex:1;overflow:hidden}
 .sidebar{width:200px;background:var(--sf);border-right:1px solid var(--bd);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
 .center{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
-.right{width:360px;background:var(--sf);border-left:1px solid var(--bd);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
+.right{width:520px;background:var(--sf);border-left:1px solid var(--bd);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
 .plabel{padding:6px 12px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--mu);border-bottom:1px solid var(--bd);flex-shrink:0}
 .cwd-bar{padding:4px 10px;font-size:10px;font-family:var(--mo);color:var(--mu);background:var(--ra);border-bottom:1px solid var(--bd);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
 .ftree{flex:1;overflow-y:auto;padding:4px 0}
@@ -306,7 +397,13 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sa);font-size:13px;d
 .term-input{display:flex;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid var(--bd);background:var(--sf);flex-shrink:0}
 .term-input input{flex:1;background:var(--ra);border:1px solid var(--bd);border-radius:var(--r);color:var(--tx);font-family:var(--mo);font-size:12px;padding:6px 10px;outline:none;transition:border-color .15s}
 .term-input input:focus{border-color:var(--g)}
-.fvc{flex:1;overflow:auto;padding:12px;font-family:var(--mo);font-size:12px;line-height:1.7;white-space:pre;color:var(--tx);background:var(--bg)}
+.kai-head{display:flex;align-items:center;gap:7px;padding:5px 10px;border-bottom:1px solid var(--bd);background:var(--sf);font-family:var(--mo);font-size:10px;color:var(--mu)}
+.kai-head .on{color:var(--g)}.kai-head .off{color:var(--w)}
+.kai-out{flex:1;overflow:auto;padding:10px 12px;background:var(--bg);color:var(--tx);font:12px/1.55 var(--mo);white-space:pre-wrap;word-break:break-word}
+.kai-input{display:flex;align-items:center;gap:7px;padding:8px 10px;border-top:1px solid var(--bd);background:var(--sf)}
+.kai-input input{flex:1;min-width:0;background:var(--ra);border:1px solid var(--bd);border-radius:var(--r);color:var(--tx);font-family:var(--mo);font-size:12px;padding:6px 9px;outline:none}
+.kai-input input:focus{border-color:var(--ac)}
+.fvc{flex:1;min-height:0;background:var(--bg)}
 .ms-panel{padding:12px;display:flex;flex-direction:column;gap:10px;overflow-y:auto}
 .ms-label{font-size:10px;color:var(--mu);text-transform:uppercase;letter-spacing:.5px;margin-bottom:3px}
 .ms-val{font-size:11px;font-family:var(--mo);color:var(--tx);word-break:break-all}
@@ -320,6 +417,7 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sa);font-size:13px;d
 const {useState,useEffect,useRef,useCallback}=React;
 const API='http://localhost:3001';
 const SID=Math.random().toString(36).slice(2);
+ace.config.set('basePath','https://cdnjs.cloudflare.com/ajax/libs/ace/1.36.5/');
 
 // ── Tool parser — line-oriented format for GLM-4's reliability ─────────────
 function parseTools(text){
@@ -451,9 +549,10 @@ function BashPanel(){
   const [lines,setLines]=useState([{t:'info',s:'Bash REPL — server-side cwd, ↑↓ history.'}]);
   const [inp,setInp]=useState('');const [running,setRunning]=useState(false);
   const [hist,setHist]=useState([]);const [hi,setHi]=useState(-1);const [cwd,setCwd]=useState('~');
-  const outRef=useRef(null);
+  const outRef=useRef(null);const inputRef=useRef(null);
   const add=(t,s)=>setLines(l=>[...l,{t,s}]);
   useEffect(()=>{if(outRef.current)outRef.current.scrollTop=outRef.current.scrollHeight;},[lines]);
+  useEffect(()=>{if(!running)inputRef.current?.focus();},[running]);
   const run=async cmd=>{
     if(!cmd.trim())return;
     setHist(h=>[cmd,...h.slice(0,199)]);setHi(-1);add('cmd',cmd);setRunning(true);
@@ -461,6 +560,7 @@ function BashPanel(){
       const r=await fetch(`${API}/api/tool/bash`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd,sid:SID})});
       const d=await r.json();
       if(d.cwd)setCwd(homify(d.cwd));
+      if(d.expanded)add('info',`=> ${d.expanded}`);
       if(d.stdout)d.stdout.split('\n').filter(Boolean).forEach(s=>add('out',s));
       if(d.stderr)d.stderr.split('\n').filter(Boolean).forEach(s=>add('err',s));
       add('info',`exit ${d.exitCode}`);
@@ -481,12 +581,106 @@ function BashPanel(){
       </div>
       <div className="term-input">
         <span style={{color:'var(--g)',fontFamily:'var(--mo)',fontSize:12,flexShrink:0}}>$</span>
-        <input value={inp} onChange={e=>setInp(e.target.value)} onKeyDown={onKey} placeholder="command… (↑↓ history)" disabled={running} autoFocus/>
+        <input ref={inputRef} value={inp} onChange={e=>setInp(e.target.value)} onKeyDown={onKey} placeholder="command… (↑↓ history)" disabled={running} autoFocus/>
         <button className="btn bg" style={{fontSize:11,padding:'5px 9px'}} onClick={()=>{run(inp);setInp('');}} disabled={running||!inp.trim()}>Run</button>
         <button className="btn bg" style={{fontSize:11,padding:'5px 8px'}} onClick={()=>setLines([{t:'info',s:'Cleared.'}])}>Clr</button>
       </div>
     </>
   );
+}
+
+// ── CppKAI Console ───────────────────────────────────────────────────────
+const ANSI_FG={
+  30:'#555568',31:'#f06060',32:'#2dd4a0',33:'#f0c060',34:'#6aa9ff',35:'#c678dd',36:'#56d4dd',37:'#e0e0f0',
+  90:'#777792',91:'#ff7777',92:'#55e6b3',93:'#ffd27a',94:'#88bbff',95:'#da8bec',96:'#79e5eb',97:'#ffffff'
+};
+const ANSI_BG={40:'#0a0a0d',41:'#5a2020',42:'#164a39',43:'#55451d',44:'#203858',45:'#482451',46:'#17484d',47:'#d0d0dc'};
+
+function normalizeKaiIndices(text,mode){
+  let promptIndex=0,stackIndex=0;
+  const sgr='(?:\\u001b\\[[0-9;]*m)*';
+  const promptPattern=new RegExp(`\\[\\d+\\](?=${sgr}\\s+${sgr}[πρλ$])`);
+  const stackPattern=new RegExp(`\\[\\d+\\](?=${sgr}:\\s)`);
+  return text.split('\n').map(line=>{
+    if(promptPattern.test(line)){stackIndex=0;return line.replace(/\[\d+\]/,`[${++promptIndex}]`);}
+    if(stackPattern.test(line))return mode==='pi'?line:line.replace(/\[\d+\]/,`[${stackIndex++}]`);
+    stackIndex=0;return line;
+  }).join('\n');
+}
+
+function AnsiOutput({text,mode}){
+  const source=normalizeKaiIndices(text.replace(/\u001b\[[0-?]*[ -/]*([@-~])/g,(seq,final)=>final==='m'?seq:''),mode);
+  const parts=[];const pattern=/\u001b\[([0-9;]*)m/g;
+  let style={},offset=0,match,key=0;
+  const append=end=>{if(end>offset)parts.push(<span key={key++} style={{...style}}>{source.slice(offset,end)}</span>);};
+  while((match=pattern.exec(source))){
+    append(match.index);offset=pattern.lastIndex;
+    const codes=(match[1]||'0').split(';').map(Number);
+    for(const code of codes){
+      if(code===0)style={};
+      else if(code===1)style={...style,fontWeight:700};
+      else if(code===2)style={...style,opacity:.65};
+      else if(code===3)style={...style,fontStyle:'italic'};
+      else if(code===4)style={...style,textDecoration:'underline'};
+      else if(code===22){style={...style};delete style.fontWeight;delete style.opacity;}
+      else if(code===23){style={...style};delete style.fontStyle;}
+      else if(code===24){style={...style};delete style.textDecoration;}
+      else if(code===39){style={...style};delete style.color;}
+      else if(code===49){style={...style};delete style.backgroundColor;}
+      else if(ANSI_FG[code])style={...style,color:ANSI_FG[code]};
+      else if(ANSI_BG[code])style={...style,backgroundColor:ANSI_BG[code]};
+    }
+  }
+  append(source.length);
+  return <>{parts}</>;
+}
+
+function KaiConsolePanel({mode}){
+  const title=mode==='debugger'?'Debugger':mode==='rho'?'Rho':'Pi';
+  const prompt=mode==='debugger'?'debug π>':mode==='rho'?'ρ>':'π>';
+  const [output,setOutput]=useState('');const [inp,setInp]=useState('');
+  const [status,setStatus]=useState('connecting');const [hist,setHist]=useState([]);
+  const [hi,setHi]=useState(-1);const wsRef=useRef(null);const outRef=useRef(null);
+  const clean=text=>text.replace(/\r/g,'');
+  useEffect(()=>{
+    const socket=new WebSocket(API.replace(/^http/,'ws')+'/api/kai');
+    wsRef.current=socket;
+    socket.onopen=()=>socket.send(JSON.stringify({type:'start',mode}));
+    socket.onmessage=event=>{
+      const msg=JSON.parse(event.data);
+      if(msg.type==='ready')setStatus('connected');
+      else if(msg.type==='stdout'||msg.type==='stderr')setOutput(text=>(text+clean(String(msg.data))).slice(-100000));
+      else if(msg.type==='error'){setStatus('error');setOutput(text=>text+'\nError: '+msg.data+'\n');}
+      else if(msg.type==='exit'){setStatus('exited');setOutput(text=>text+`\n[CppKAI exited ${msg.data}]\n`);}
+    };
+    socket.onerror=()=>setStatus('error');
+    socket.onclose=()=>setStatus(s=>s==='exited'?s:'closed');
+    return()=>{socket.close();wsRef.current=null;};
+  },[mode]);
+  useEffect(()=>{if(outRef.current)outRef.current.scrollTop=outRef.current.scrollHeight;},[output]);
+  const run=command=>{
+    if(!command.trim()||wsRef.current?.readyState!==WebSocket.OPEN)return;
+    wsRef.current.send(JSON.stringify({type:'input',data:command}));
+    setHist(h=>[command,...h.slice(0,199)]);setHi(-1);setInp('');
+  };
+  const onKey=event=>{
+    if(event.key==='Enter')run(inp);
+    else if(event.key==='ArrowUp'){event.preventDefault();const i=Math.min(hi+1,hist.length-1);setHi(i);setInp(hist[i]||'');}
+    else if(event.key==='ArrowDown'){event.preventDefault();const i=Math.max(hi-1,-1);setHi(i);setInp(i<0?'':hist[i]);}
+  };
+  return <>
+    <div className="kai-head">
+      <strong style={{color:'var(--ac)'}}>CppKAI {title}</strong><span style={{flex:1}}>Ext/CppKAI</span>
+      {mode==='debugger'&&<button className="btn bg" style={{fontSize:10,padding:'3px 7px'}} onClick={()=>run('stack')}>Stack</button>}
+      <button className="btn bg" style={{fontSize:10,padding:'3px 7px'}} onClick={()=>setOutput('')}>Clear</button>
+      <span className={status==='connected'?'on':'off'}>{status}</span>
+    </div>
+    <div className="kai-out" ref={outRef}><AnsiOutput text={output||`Starting CppKAI ${title}…\n`} mode={mode}/></div>
+    <div className="kai-input"><span style={{color:'var(--ac)',fontFamily:'var(--mo)'}}>{prompt}</span>
+      <input value={inp} onChange={e=>setInp(e.target.value)} onKeyDown={onKey} disabled={status!=='connected'} placeholder={mode==='rho'?'x = 42':'2 3 +'}/>
+      <button className="btn bp" style={{fontSize:10,padding:'5px 8px'}} onClick={()=>run(inp)} disabled={status!=='connected'||!inp.trim()}>Run</button>
+    </div>
+  </>;
 }
 
 // ── MSPanel ───────────────────────────────────────────────────────────────
@@ -509,19 +703,87 @@ function MSPanel(){
 }
 
 // ── FileViewPanel ─────────────────────────────────────────────────────────
-function FileViewPanel({fp}){
+function aceMode(fp){
+  const ext=(fp.split('.').pop()||'').toLowerCase();
+  const modes={
+    c:'c_cpp',cc:'c_cpp',cpp:'c_cpp',cxx:'c_cpp',h:'c_cpp',hh:'c_cpp',hpp:'c_cpp',
+    js:'javascript',jsx:'javascript',mjs:'javascript',ts:'typescript',tsx:'typescript',
+    py:'python',rb:'ruby',rs:'rust',go:'golang',java:'java',sh:'sh',bash:'sh',zsh:'sh',
+    html:'html',htm:'html',css:'css',scss:'scss',json:'json',yaml:'yaml',yml:'yaml',
+    md:'markdown',xml:'xml',sql:'sql',cmake:'cmake'
+  };
+  const name=fp.split('/').pop().toLowerCase();
+  if(name==='makefile')return 'makefile';
+  if(name==='dockerfile')return 'dockerfile';
+  return modes[ext]||'text';
+}
+
+function FileViewPanel({fp,onClose}){
   const [content,setContent]=useState(null);const [err,setErr]=useState(null);
+  const [dirty,setDirty]=useState(false);const [saving,setSaving]=useState(false);
+  const [notice,setNotice]=useState('');const editorEl=useRef(null);
+  const aceRef=useRef(null);const suppressChange=useRef(false);const saveRef=useRef(null);
+  const dirtyRef=useRef(false);const closeRef=useRef(onClose);
+  dirtyRef.current=dirty;closeRef.current=onClose;
   useEffect(()=>{
     if(!fp){setContent(null);setErr(null);return;}
+    setContent(null);setErr(null);setDirty(false);setNotice('');
     fetch(`${API}/api/fs/read?path=${encodeURIComponent(fp)}`).then(r=>r.json())
       .then(d=>{if(d.error)setErr(d.error);else setContent(d.content);}).catch(e=>setErr(e.message));
   },[fp]);
+  const save=async()=>{
+    if(!fp||!aceRef.current||saving)return;
+    setSaving(true);setErr(null);setNotice('');
+    let saved=false;
+    try{
+      const response=await fetch(`${API}/api/fs/write`,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({path:fp,content:aceRef.current.getValue()})});
+      const result=await response.json();
+      if(!response.ok||result.error)throw new Error(result.error||`HTTP ${response.status}`);
+      dirtyRef.current=false;setDirty(false);setNotice('Saved');saved=true;
+    }catch(e){setErr(e.message);}
+    setSaving(false);
+    return saved;
+  };
+  saveRef.current=save;
+  useEffect(()=>{
+    if(content==null||!editorEl.current)return;
+    let editor=aceRef.current;
+    if(!editor){
+      editor=ace.edit(editorEl.current);aceRef.current=editor;
+      editor.setTheme('ace/theme/monokai');
+      editor.setKeyboardHandler('ace/keyboard/vim',()=>{
+        const Vim=ace.require('ace/keyboard/vim').Vim;
+        Vim.defineEx('write','w',()=>saveRef.current?.());
+        Vim.defineEx('quit','q',(_cm,params)=>{
+          if(dirtyRef.current&&!params?.bang){setErr('No write since last change (add ! to override)');return;}
+          closeRef.current?.();
+        });
+        Vim.defineEx('wq','wq',async()=>{if(await saveRef.current?.())closeRef.current?.();});
+        Vim.defineEx('xit','x',async()=>{if(!dirtyRef.current||await saveRef.current?.())closeRef.current?.();});
+      });
+      editor.setOptions({fontSize:'12px',showPrintMargin:false,useWorker:false});
+      editor.session.on('change',()=>{if(!suppressChange.current){dirtyRef.current=true;setDirty(true);setNotice('');}});
+      editor.commands.addCommand({name:'saveFile',bindKey:{win:'Ctrl-S',mac:'Command-S'},exec:()=>saveRef.current?.()});
+    }
+    suppressChange.current=true;
+    editor.session.setMode(`ace/mode/${aceMode(fp)}`);
+    editor.setValue(content,-1);editor.clearSelection();
+    suppressChange.current=false;editor.resize();
+  },[content,fp]);
+  useEffect(()=>()=>{aceRef.current?.destroy();aceRef.current=null;},[]);
   if(!fp)return<div style={{padding:14,color:'var(--mu)',fontSize:12}}>Select a file from the explorer</div>;
   return(
     <>
-      <div style={{padding:'4px 12px',borderBottom:'1px solid var(--bd)',background:'var(--sf)',fontSize:10,fontFamily:'var(--mo)',color:'var(--mu)',flexShrink:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{fp}</div>
+      <div style={{padding:'4px 12px',borderBottom:'1px solid var(--bd)',background:'var(--sf)',fontSize:10,fontFamily:'var(--mo)',color:'var(--mu)',flexShrink:0,display:'flex',alignItems:'center',gap:7}}>
+        <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{fp}</span>
+        {dirty&&<span style={{color:'var(--y)'}}>Modified</span>}
+        {notice&&<span style={{color:'var(--g)'}}>{notice}</span>}
+        <span>Vim · {aceMode(fp)}</span>
+        <button className="btn bp" style={{fontSize:10,padding:'3px 7px'}} onClick={save} disabled={saving||!dirty}>{saving?'Saving…':'Save'}</button>
+      </div>
       {err&&<div style={{padding:12,color:'var(--w)',fontSize:11}}>{err}</div>}
-      {content!=null&&<div className="fvc">{content}</div>}
+      <div ref={editorEl} className="fvc" style={{display:content==null?'none':'block'}}/>
     </>
   );
 }
@@ -771,13 +1033,16 @@ function App(){
         </div>
         <div className="right">
           <div className="tabs">
-            {[['bash','⚡ Bash'],['file','📄 File'],['ms','📦 Store']].map(([t,l])=>(
+            {[['bash','Bash'],['pi','Pi'],['rho','Rho'],['debugger','Debug'],['file','File'],['ms','Store']].map(([t,l])=>(
               <div key={t} className={`tab${rtab===t?' a':''}`} onClick={()=>setRtab(t)}>{l}</div>
             ))}
           </div>
           <div className="rp">
             {rtab==='bash'&&<BashPanel/>}
-            {rtab==='file'&&<FileViewPanel fp={openFile}/>}
+            {rtab==='pi'&&<KaiConsolePanel mode="pi"/>}
+            {rtab==='rho'&&<KaiConsolePanel mode="rho"/>}
+            {rtab==='debugger'&&<KaiConsolePanel mode="debugger"/>}
+            {rtab==='file'&&<FileViewPanel fp={openFile} onClose={()=>{setOpenFile(null);setRtab('bash');}}/>}
             {rtab==='ms'  &&<MSPanel/>}
           </div>
         </div>
@@ -810,4 +1075,5 @@ echo -e "  App:    file://${HTML}"
 echo -e "  Server: http://localhost:${NODE_PORT}"
 echo -e "  Model:  ${MODEL} via Ollama\n"
 
-GLM_BASE_URL="http://localhost:${OLLAMA_PORT}" GLM_MODEL="$MODEL" SAFE_ROOT="$HOME" MS_DIR="$MS_DIR" node server.js
+GLM_BASE_URL="http://localhost:${OLLAMA_PORT}" GLM_MODEL="$MODEL" SAFE_ROOT="$HOME" \
+MS_DIR="$MS_DIR" KAI_DIR="$KAI_DIR" KAI_CONSOLE="$KAI_CONSOLE" node server.js
