@@ -30,6 +30,14 @@ test('editor save posts current Ace content to the filesystem endpoint',()=>{
   assert.match(html,/content:aceRef\.current\.getValue\(\)/);
 });
 
+test('main chat panel is a plain chat surface',()=>{
+  assert.match(html,/chat-input-area/);
+  assert.match(html,/placeholder="Message…"/);
+  assert.match(html,/How can I help\?/);
+  assert.doesNotMatch(html,/main-question-box/);
+  assert.doesNotMatch(html,/effort-row/);
+});
+
 test('./s is a thin launcher',()=>{
   assert.match(launcher,/exec npm start/);
   assert.doesNotMatch(launcher,/cat >|TOOL:|new WebSocketServer|editor\.setTheme/);
@@ -42,6 +50,33 @@ test('index.html provides the Vim-enabled, syntax-colored Ace editor',()=>{
   assert.match(html,/editor\.session\.setMode\(`ace\/mode\/\$\{aceMode\(filePath\)\}`\)/);
   assert.match(html,/editor\.commands\.addCommand\(\{name:'saveFile'/);
   assert.match(html,/win:'Ctrl-S',mac:'Command-S'/);
+});
+
+test('index.html exposes the right-side Bash and KAI buttons',()=>{
+  assert.match(html,/right-tab/);
+  assert.match(html,/Bash/);
+  assert.match(html,/Pi/);
+  assert.match(html,/Rho/);
+  assert.match(html,/Debug/);
+  assert.match(html,/right-resizer/);
+  assert.match(html,/KaiConsolePanel mode="pi"/);
+  assert.match(html,/KaiConsolePanel mode="rho"/);
+  assert.match(html,/KaiConsolePanel mode="debugger"/);
+  assert.match(html,/WebSocket\(API\.replace\(/);
+});
+
+test('file browser hides dotfiles by default',()=>{
+  assert.match(html,/visibleEntries/);
+  assert.match(html,/entries\.filter\(\(e\) => !e\.name\.startsWith\('\.'\)\)/);
+  assert.match(html,/Show dotfiles/);
+  assert.match(html,/Hide dotfiles/);
+});
+
+test('rho uses the Vim editor instead of a one-line prompt',()=>{
+  assert.match(html,/RhoEditorPanel/);
+  assert.match(html,/mirrors to Pi on change/);
+  assert.match(html,/Ctrl-Enter/);
+  assert.match(html,/editor\.setKeyboardHandler\('ace\/keyboard\/vim'\)/);
 });
 
 test('server.js integrates the filesystem and chat endpoints',()=>{
@@ -57,6 +92,12 @@ test('server.js exposes the current REPL and filesystem endpoints',()=>{
   assert.match(server,/app\.get\('\/api\/fs\/read'/);
   assert.match(server,/app\.post\('\/api\/fs\/write'/);
   assert.match(server,/app\.get\('\/api\/health'/);
+});
+
+test('server.js exposes the KAI websocket bridge',()=>{
+  assert.match(server,/api\/kai/);
+  assert.match(server,/CppKAI Console is not built/);
+  assert.match(server,/spawn\('script',\['-qefc',command,'\/dev\/null'\]/);
 });
 
 test('./s is no longer the implementation for CppKAI or the editor',()=>{

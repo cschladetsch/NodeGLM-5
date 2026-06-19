@@ -1,5 +1,5 @@
-const express=require('express'),cors=require('cors'),fs=require('fs'),path=require('path'),os=require('os'),http=require('http'),https=require('https');
-const {exec}=require('child_process');
+const express=require('express'),cors=require('cors'),fs=require('fs'),path=require('path'),os=require('os'),http=require('http'),https=require('https'),crypto=require('crypto');
+const {exec,spawn}=require('child_process');
 const Diff=require('diff');
 
 const app=express();
@@ -13,6 +13,9 @@ const ROOT  =fs.realpathSync(path.resolve(process.env.SAFE_ROOT||process.env.HOM
 const PORT  =process.env.PORT        ||3001;
 const MODEL =process.env.GLM_MODEL   ||'glm4:9b';
 const MS_DIR=process.env.MS_DIR      ||path.join(os.homedir(),'local/repos/CppLmmModelStore');
+const KAI_DIR=process.env.KAI_DIR    ||path.join(__dirname,'Ext/CppKAI');
+const ENET_DIR=process.env.ENET_DIR  ||path.join(__dirname,'Ext/ENet');
+const KAI_CONSOLE=process.env.KAI_CONSOLE||path.join(KAI_DIR,'Bin/Console');
 
 // Sessions: cwd tracked per SID
 const sessions={};
@@ -61,38 +64,10 @@ app.get('/api/modelstore',(_req,res)=>{
   res.json({base,models,ms_dir:MS_DIR,ms_built:fs.existsSync(path.join(MS_DIR,'build'))});
 });
 
-// System prompt — explicit about path resolution and cwd
-const SYSTEM=`You are GLM-Code, an autonomous software engineering agent with full shell access.
-
-To perform actions emit tool calls using EXACTLY this format:
-
-TOOL:bash
-CMD:the shell command here
-END_TOOL
-
-TOOL:read_file
-PATH:path/to/file
-END_TOOL
-
-TOOL:write_file
-PATH:path/to/file
-CONTENT:
-full file content here
-END_TOOL
-
-TOOL:done
-SUMMARY:what was accomplished
-END_TOOL
-
-Critical rules:
-- Emit ONE tool call per response, then stop and wait for the result.
-- Do NOT emit tool calls as plain prose or inside sentences. Use the exact format above.
-- bash CMD runs in the current working directory shown in [cwd:...].
-- read_file PATH is resolved relative to [cwd:...] if not absolute.
-- To change directory use: TOOL:bash / CMD:cd /some/path / END_TOOL — this updates the cwd for all subsequent tools.
-- Read a file before writing it if you need to know its current content.
-- After each tool result, decide: emit another tool, or emit TOOL:done.
-- Never emit markdown fences.
+// System prompt — helpful conversational assistant
+const SYSTEM=`You are GLM-Code, a helpful, precise, and expert conversational software engineering assistant.
+You answer questions, explain code, and provide clear guidance on software development.
+When writing code, explain your design and provide complete, functional code blocks using standard markdown code fences (e.g. \`\`\`javascript).
 `;
 
 app.post('/api/chat',(req,res)=>{
@@ -230,7 +205,125 @@ app.post('/api/fs/write',(req,res)=>{
 app.get('/api/health',(_,res)=>res.json({ok:true,model:MODEL,ollama:OLLAMA,root:ROOT}));
 
 const server=http.createServer(app);
+function wsFrame(text){
+  const payload=Buffer.from(String(text));
+  const len=payload.length;
+  let header;
+  if(len<126){
+    header=Buffer.alloc(2);
+    header[1]=len;
+  }else if(len<0x10000){
+    header=Buffer.alloc(4);
+    header[1]=126;
+    header.writeUInt16BE(len,2);
+  }else{
+    header=Buffer.alloc(10);
+    header[1]=127;
+    header.writeBigUInt64BE(BigInt(len),2);
+  }
+  header[0]=0x81;
+  return Buffer.concat([header,payload]);
+}
+function wsDecode(buffer){
+  if(buffer.length<2)return null;
+  const b1=buffer[0],b2=buffer[1];
+  const opcode=b1&0x0f;
+  let len=b2&0x7f;
+  let offset=2;
+  if(len===126){
+    if(buffer.length<4)return null;
+    len=buffer.readUInt16BE(2);
+    offset=4;
+  }else if(len===127){
+    if(buffer.length<10)return null;
+    len=Number(buffer.readBigUInt64BE(2));
+    offset=10;
+  }
+  const masked=!!(b2&0x80);
+  const maskBytes=masked?4:0;
+  if(buffer.length<offset+maskBytes+len)return null;
+  let payload=buffer.slice(offset+maskBytes,offset+maskBytes+len);
+  if(masked){
+    const mask=buffer.slice(offset,offset+4);
+    payload=Buffer.from(payload.map((byte,i)=>byte^mask[i%4]));
+  }
+  return {opcode,text:payload.toString('utf8'),rest:buffer.slice(offset+maskBytes+len)};
+}
+function ensureKaiENet(){
+  const kaiEnet=path.join(KAI_DIR,'Ext/ENet');
+  try{
+    if(!fs.existsSync(kaiEnet)){
+      fs.mkdirSync(path.dirname(kaiEnet),{recursive:true});
+      fs.symlinkSync(ENET_DIR,kaiEnet,'dir');
+    }
+  }catch{}
+}
+server.on('upgrade',(req,socket,head)=>{
+  if(req.url!=='/api/kai'){socket.destroy();return;}
+  const key=req.headers['sec-websocket-key'];
+  if(!key){socket.destroy();return;}
+  const accept=crypto.createHash('sha1')
+    .update(key+'258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+    .digest('base64');
+  socket.write([
+    'HTTP/1.1 101 Switching Protocols',
+    'Upgrade: websocket',
+    'Connection: Upgrade',
+    `Sec-WebSocket-Accept: ${accept}`,
+    '',
+    ''
+  ].join('\r\n'));
+
+  let proc=null;
+  let recv=head&&head.length?Buffer.from(head):Buffer.alloc(0);
+  const send=(type,data)=>{
+    if(!socket.writable)return;
+    socket.write(wsFrame(JSON.stringify({type,data})));
+  };
+  socket.on('data',chunk=>{
+    recv=Buffer.concat([recv,chunk]);
+    while(true){
+      const msg=wsDecode(recv);
+      if(!msg)break;
+      recv=msg.rest;
+      if(msg.opcode===0x8){socket.end();return;}
+      if(msg.opcode!==0x1)continue;
+      let parsed;
+      try{parsed=JSON.parse(msg.text);}catch{send('error','Invalid request');continue;}
+      if(parsed.type==='start'&&!proc){
+        const mode=['pi','rho','debugger'].includes(parsed.mode)?parsed.mode:'pi';
+        if(!fs.existsSync(KAI_CONSOLE))return send('error','CppKAI Console is not built');
+        ensureKaiENet();
+        const args=mode==='debugger'?['-l','pi','-t','5','--verbose']:['-l',mode];
+        const quote=value=>`'${String(value).replace(/'/g,"'\\''")}'`;
+        const command=[KAI_CONSOLE,...args].map(quote).join(' ');
+        proc=spawn('script',['-qefc',command,'/dev/null'],{
+          cwd:KAI_DIR,
+          env:{...process.env,TERM:'xterm-256color'},
+          stdio:['pipe','pipe','pipe']
+        });
+        proc.stdout.on('data',data=>send('stdout',data.toString()));
+        proc.stderr.on('data',data=>send('stderr',data.toString()));
+        proc.on('error',error=>send('error',error.message));
+        proc.on('close',code=>{send('exit',code);proc=null;});
+        send('ready',mode);
+      }else if(parsed.type==='input'&&proc){
+        proc.stdin.write(String(parsed.data||'')+'\n');
+      }else if(parsed.type==='stop'&&proc){
+        proc.kill('SIGTERM');proc=null;
+      }
+    }
+  });
+  socket.on('close',()=>{if(proc)proc.kill('SIGTERM');});
+});
 if(require.main===module){
+  server.on('error',error=>{
+    if(error.code==='EADDRINUSE'){
+      console.error(`Port ${PORT} is already in use. Stop the existing NodeGLM server or set PORT to another value.`);
+      process.exit(1);
+    }
+    throw error;
+  });
   server.listen(PORT,()=>console.log(`  glm-code http://localhost:${PORT}  model=${MODEL}  root=${ROOT}`));
 }
 

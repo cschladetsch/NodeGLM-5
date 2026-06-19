@@ -272,6 +272,9 @@
     border-top: 1px solid var(--border);
     background: var(--surface);
     flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
   }
   .chat-input-files {
     display: flex;
@@ -316,26 +319,6 @@
   .btn-primary:not(:disabled):hover { opacity: .85; }
   .btn-ghost { background: var(--raised); color: var(--text); border: 1px solid var(--border); }
   .btn-ghost:not(:disabled):hover { border-color: var(--accent); color: var(--accent); }
-
-  /* effort selector */
-  .effort-row {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-top: 8px;
-  }
-  .effort-label { font-size: 11px; color: var(--muted); }
-  .effort-btn {
-    padding: 2px 8px;
-    border-radius: 10px;
-    border: 1px solid var(--border);
-    background: none;
-    color: var(--muted);
-    font-size: 11px;
-    cursor: pointer;
-    transition: all .15s;
-  }
-  .effort-btn.active { border-color: var(--accent); color: var(--accent); background: #2020388f; }
 
   /* ── REPL tab ── */
   .repl-panel {
@@ -396,6 +379,144 @@
     transition: border-color .15s;
   }
   .repl-input-row input:focus { border-color: var(--accent2); }
+
+  .right-resizer {
+    width: 5px;
+    cursor: col-resize;
+    background: var(--border);
+    flex-shrink: 0;
+    transition: background .12s;
+    touch-action: none;
+  }
+  .right-resizer:hover,
+  .right-resizer.dragging {
+    background: var(--accent);
+  }
+  .right {
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+    overflow: hidden;
+    min-width: 320px;
+  }
+  .right-tabs {
+    display: flex;
+    gap: 2px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+    padding: 0 8px;
+    overflow-x: auto;
+  }
+  .right-tab {
+    padding: 7px 10px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .3px;
+    color: var(--muted);
+    border: none;
+    border-bottom: 2px solid transparent;
+    background: transparent;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .right-tab.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+  .right-tab:hover:not(.active) { color: var(--text); }
+
+  /* ── KAI panels ── */
+  .kai-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .kai-head {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .kai-head .on { color: var(--accent2); }
+  .kai-head .off { color: var(--warn); }
+  .kai-out {
+    flex: 1;
+    overflow: auto;
+    padding: 10px 12px;
+    background: var(--bg);
+    color: var(--text);
+    font: 12px/1.55 var(--mono);
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .kai-editor {
+    flex: 1;
+    min-height: 180px;
+    background: var(--bg);
+  }
+  .kai-input {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 8px 10px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    flex-shrink: 0;
+  }
+  .kai-input input {
+    flex: 1;
+    min-width: 0;
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 6px 9px;
+    outline: none;
+  }
+  .kai-input input:focus { border-color: var(--accent); }
+
+  /* ── Model Store ── */
+  .ms-panel {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+  }
+  .ms-label {
+    font-size: 10px;
+    color: var(--muted);
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    margin-bottom: 3px;
+  }
+  .ms-val {
+    font-size: 11px;
+    font-family: var(--mono);
+    color: var(--text);
+    word-break: break-all;
+  }
+  .ms-model {
+    padding: 4px 8px;
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: 11px;
+    font-family: var(--mono);
+    margin-top: 3px;
+  }
 
   /* ── FILE VIEWER ── */
   .file-viewer {
@@ -549,6 +670,7 @@ function FileBrowser({ onInject, onOpenFile }) {
   const [entries, setEntries] = useState([]);
   const [selected, setSelected] = useState(null);
   const [err, setErr] = useState(null);
+  const [showDotfiles, setShowDotfiles] = useState(false);
 
   const load = useCallback((p) => {
     setErr(null);
@@ -576,9 +698,22 @@ function FileBrowser({ onInject, onOpenFile }) {
     load(parts.join('/') || '');
   };
 
+  const visibleEntries = showDotfiles
+    ? entries
+    : entries.filter((e) => !e.name.startsWith('.'));
+
   return (
     <div className="sidebar">
-      <div className="sidebar-header">📁 Files</div>
+      <div className="sidebar-header" style={{justifyContent:'space-between'}}>
+        <span>📁 Files</span>
+        <button
+          className="btn btn-ghost"
+          style={{fontSize:10,padding:'4px 8px'}}
+          onClick={() => setShowDotfiles(v => !v)}
+        >
+          {showDotfiles ? 'Hide dotfiles' : 'Show dotfiles'}
+        </button>
+      </div>
       <div className="sidebar-path" title={curPath}>~/{curPath}</div>
       {err && <div style={{padding:'8px 12px',color:'var(--warn)',fontSize:11}}>{err}</div>}
       <div className="sidebar-list">
@@ -588,7 +723,7 @@ function FileBrowser({ onInject, onOpenFile }) {
             <span className="name">..</span>
           </div>
         )}
-        {entries.map(e => (
+        {visibleEntries.map(e => (
           <div
             key={e.name}
             className={`sidebar-entry${selected === (curPath==='.'?e.name:`${curPath}/${e.name}`) ? ' selected' : ''}`}
@@ -600,7 +735,7 @@ function FileBrowser({ onInject, onOpenFile }) {
             {e.type === 'file' && <span className="size">{fmt(e.size)}</span>}
           </div>
         ))}
-        {entries.length === 0 && !err && (
+        {visibleEntries.length === 0 && !err && (
           <div style={{padding:'8px 12px',color:'var(--muted)',fontSize:11}}>Empty</div>
         )}
       </div>
@@ -698,6 +833,209 @@ function ReplPanel({ cwd }) {
           disabled={running || !input.trim()}>
           Run
         </button>
+      </div>
+    </div>
+  );
+}
+
+const ANSI_FG={
+  30:'#555568',31:'#f06060',32:'#2dd4a0',33:'#f0c060',34:'#6aa9ff',35:'#c678dd',36:'#56d4dd',37:'#e0e0f0',
+  90:'#777792',91:'#ff7777',92:'#55e6b3',93:'#ffd27a',94:'#88bbff',95:'#da8bec',96:'#79e5eb',97:'#ffffff'
+};
+const ANSI_BG={40:'#0a0a0d',41:'#5a2020',42:'#164a39',43:'#55451d',44:'#203858',45:'#482451',46:'#17484d',47:'#d0d0dc'};
+
+function normalizeKaiIndices(text,mode){
+  let promptIndex=0,stackIndex=0;
+  const sgr='(?:\\u001b\\[[0-9;]*m)*';
+  const promptPattern=new RegExp(`\\[\\d+\\](?=${sgr}\\s+${sgr}[πρλ$])`);
+  const stackPattern=new RegExp(`\\[\\d+\\](?=${sgr}:\\s)`);
+  return text.split('\n').map(line=>{
+    if(promptPattern.test(line)){stackIndex=0;return line.replace(/\[\d+\]/,`[${++promptIndex}]`);}
+    if(stackPattern.test(line))return mode==='pi'?line:line.replace(/\[\d+\]/,`[${stackIndex++}]`);
+    stackIndex=0;return line;
+  }).join('\n');
+}
+
+function AnsiOutput({text,mode}){
+  const source=normalizeKaiIndices(text.replace(/\u001b\[[0-?]*[ -/]*([@-~])/g,(seq,final)=>final==='m'?seq:''),mode);
+  const parts=[];const pattern=/\u001b\[([0-9;]*)m/g;
+  let style={},offset=0,match,key=0;
+  const append=end=>{if(end>offset)parts.push(<span key={key++} style={{...style}}>{source.slice(offset,end)}</span>);};
+  while((match=pattern.exec(source))){
+    append(match.index);offset=pattern.lastIndex;
+    const codes=(match[1]||'0').split(';').map(Number);
+    for(const code of codes){
+      if(code===0)style={};
+      else if(code===1)style={...style,fontWeight:700};
+      else if(code===2)style={...style,opacity:.65};
+      else if(code===3)style={...style,fontStyle:'italic'};
+      else if(code===4)style={...style,textDecoration:'underline'};
+      else if(code===22){style={...style};delete style.fontWeight;delete style.opacity;}
+      else if(code===23){style={...style};delete style.fontStyle;}
+      else if(code===24){style={...style};delete style.textDecoration;}
+      else if(code===39){style={...style};delete style.color;}
+      else if(code===49){style={...style};delete style.backgroundColor;}
+      else if(ANSI_FG[code])style={...style,color:ANSI_FG[code]};
+      else if(ANSI_BG[code])style={...style,backgroundColor:ANSI_BG[code]};
+    }
+  }
+  append(source.length);
+  return <>{parts}</>;
+}
+
+function KaiConsolePanel({mode,rhoMirror,onMirrorChange}){
+  const title=mode==='debugger'?'Debugger':mode==='rho'?'Rho':'Pi';
+  const prompt=mode==='debugger'?'debug π>':mode==='rho'?'ρ>':'π>';
+  const [output,setOutput]=useState('');
+  const [inp,setInp]=useState('');
+  const [status,setStatus]=useState('connecting');
+  const [hist,setHist]=useState([]);
+  const [hi,setHi]=useState(-1);
+  const wsRef=useRef(null);
+  const outRef=useRef(null);
+  const clean=text=>text.replace(/\r/g,'');
+
+  useEffect(()=>{
+    const socket=new WebSocket(API.replace(/^http/,'ws')+'/api/kai');
+    wsRef.current=socket;
+    socket.onopen=()=>socket.send(JSON.stringify({type:'start',mode}));
+    socket.onmessage=event=>{
+      const msg=JSON.parse(event.data);
+      if(msg.type==='ready')setStatus('connected');
+      else if(msg.type==='stdout'||msg.type==='stderr')setOutput(text=>(text+clean(String(msg.data))).slice(-100000));
+      else if(msg.type==='error'){setStatus('error');setOutput(text=>text+'\nError: '+msg.data+'\n');}
+      else if(msg.type==='exit'){setStatus('exited');setOutput(text=>text+`\n[CppKAI exited ${msg.data}]\n`);}
+    };
+    socket.onerror=()=>setStatus('error');
+    socket.onclose=()=>setStatus(s=>s==='exited'?s:'closed');
+    return()=>{socket.close();wsRef.current=null;};
+  },[mode]);
+
+  useEffect(()=>{if(outRef.current)outRef.current.scrollTop=outRef.current.scrollHeight;},[output]);
+
+  const run=command=>{
+    if(!command.trim()||wsRef.current?.readyState!==WebSocket.OPEN)return;
+    wsRef.current.send(JSON.stringify({type:'input',data:command}));
+    setHist(h=>[command,...h.slice(0,199)]);
+    setHi(-1);
+    setInp('');
+  };
+  const onKey=event=>{
+    if(event.key==='Enter')run(inp);
+    else if(event.key==='ArrowUp'){event.preventDefault();const i=Math.min(hi+1,hist.length-1);setHi(i);setInp(hist[i]||'');}
+    else if(event.key==='ArrowDown'){event.preventDefault();const i=Math.max(hi-1,-1);setHi(i);setInp(i<0?'':hist[i]);}
+  };
+
+  return(
+    <div className="kai-panel">
+      <div className="kai-head">
+        <strong style={{color:'var(--accent)'}}>CppKAI {title}</strong><span style={{flex:1}}>Ext/CppKAI</span>
+        {mode==='debugger'&&<button className="btn bg" style={{fontSize:10,padding:'3px 7px'}} onClick={()=>run('stack')}>Stack</button>}
+        <button className="btn bg" style={{fontSize:10,padding:'3px 7px'}} onClick={()=>setOutput('')}>Clear</button>
+        <span className={status==='connected'?'on':'off'}>{status}</span>
+      </div>
+      {mode==='rho' ? (
+        <RhoEditorPanel
+          value={inp}
+          onChange={value=>{setInp(value); onMirrorChange?.(value);}}
+          onRun={run}
+          status={status}
+          mirrorText={rhoMirror}
+        />
+      ) : (
+        <>
+          {mode==='pi' && rhoMirror && (
+            <div style={{padding:'7px 10px',borderBottom:'1px solid var(--border)',background:'var(--bg)',fontSize:10,fontFamily:'var(--mono)',color:'var(--muted)',whiteSpace:'pre-wrap',maxHeight:140,overflow:'auto'}}>
+              <div style={{color:'var(--accent)',marginBottom:4}}>Rho mirror</div>
+              {rhoMirror}
+            </div>
+          )}
+          <div className="kai-out" ref={outRef}><AnsiOutput text={output||`Starting CppKAI ${title}…\n`} mode={mode}/></div>
+        <div className="kai-input">
+          <span style={{color:'var(--accent)',fontFamily:'var(--mono)'}}>{prompt}</span>
+          <input value={inp} onChange={e=>setInp(e.target.value)} onKeyDown={onKey} disabled={status!=='connected'} placeholder="2 3 +"/>
+          <button className="btn bp" style={{fontSize:10,padding:'5px 8px'}} onClick={()=>run(inp)} disabled={status!=='connected'||!inp.trim()}>Run</button>
+        </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ModelStorePanel(){
+  const [info,setInfo]=useState(null);
+  useEffect(()=>{fetch(`${API}/api/modelstore`).then(r=>r.json()).then(setInfo).catch(()=>{});},[]);
+  if(!info)return<div style={{padding:12,color:'var(--muted)',fontSize:11}}>Loading…</div>;
+  return(
+    <div className="ms-panel">
+      <div><div className="ms-label">Store root</div><div className="ms-val">{homify(info.base)}</div></div>
+      <div><div className="ms-label">Source dir</div><div className="ms-val">{homify(info.ms_dir)}</div></div>
+      <div><div className="ms-label">Built</div><div className="ms-val" style={{color:info.ms_built?'var(--accent2)':'var(--warn)'}}>{info.ms_built?'Yes':'No'}</div></div>
+      <div>
+        <div className="ms-label">Models ({info.models.length})</div>
+        {info.models.length===0&&<div style={{fontSize:11,color:'var(--muted)',marginTop:4}}>None found — store is empty</div>}
+        {info.models.map(m=><div key={m} className="ms-model">📦 {m}</div>)}
+      </div>
+    </div>
+  );
+}
+
+function VimEditorInput({value,onChange,onRun,placeholder='enter text…',disabled=false}){
+  const editorEl=useRef(null);
+  const editorRef=useRef(null);
+  const valueRef=useRef(value||'');
+  valueRef.current=value||'';
+
+  useEffect(()=>{
+    if(!editorEl.current)return;
+    let editor=editorRef.current;
+    if(!editor){
+      editor=ace.edit(editorEl.current);
+      editorRef.current=editor;
+      editor.setTheme('ace/theme/monokai');
+      editor.setKeyboardHandler('ace/keyboard/vim');
+      editor.setOptions({fontSize:'12px',showPrintMargin:false,useWorker:false});
+      editor.session.setMode('ace/mode/text');
+      editor.session.on('change',()=>{onChange(editor.getValue());});
+      editor.commands.addCommand({
+        name:'runBuffer',
+        bindKey:{win:'Ctrl-Enter',mac:'Command-Enter'},
+        exec:()=>onRun?.(editor.getValue()),
+      });
+    }
+    if(editor.getValue()!==valueRef.current){
+      editor.setValue(valueRef.current,-1);
+      editor.clearSelection();
+    }
+    editor.setOptions({readOnly:disabled});
+    editor.resize();
+  },[disabled,onChange,onRun]);
+
+  useEffect(()=>()=>{editorRef.current?.destroy(); editorRef.current=null;},[]);
+
+  return <div ref={editorEl} className="kai-editor" data-placeholder={placeholder}/>;
+}
+
+function RhoEditorPanel({value,onChange,onRun,status,mirrorText}){
+  return(
+    <div className="kai-panel">
+      <div className="kai-head">
+        <strong style={{color:'var(--accent)'}}>CppKAI Rho</strong>
+        <span style={{flex:1}}>Vim editor · mirrors to Pi on change</span>
+        <button className="btn bp" style={{fontSize:10,padding:'5px 8px'}} onClick={()=>onRun?.(value)} disabled={status!=='connected'||!value.trim()}>Run</button>
+        <span className={status==='connected'?'on':'off'}>{status}</span>
+      </div>
+      <div style={{display:'flex',flexDirection:'column',flex:1,minHeight:0}}>
+        <VimEditorInput
+          value={value}
+          onChange={onChange}
+          onRun={onRun}
+          placeholder="x = 42"
+          disabled={status!=='connected'}
+        />
+      </div>
+      <div style={{padding:'6px 10px',borderTop:'1px solid var(--border)',background:'var(--surface)',fontSize:10,fontFamily:'var(--mono)',color:'var(--muted)',flexShrink:0}}>
+        {mirrorText ? `Pi mirror: ${mirrorText.length} chars` : 'Pi mirror: empty'}
       </div>
     </div>
   );
@@ -807,11 +1145,10 @@ function FileViewerPanel({ filePath }) {
 // ── Chat panel ─────────────────────────────────────────────────────────────
 function ChatPanel({ injectedFile, onClearInject }) {
   const [messages, setMessages] = useState([
-    { role:'assistant', content:'GLM Code ready. Ask for a change or inject a local file.' }
+    { role:'assistant', content:'How can I help?' }
   ]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
-  const [effort, setEffort] = useState('max');
   const [attachedFiles, setAttachedFiles] = useState([]);
   const messagesEndRef = useRef(null);
   const taRef = useRef(null);
@@ -835,72 +1172,6 @@ function ChatPanel({ injectedFile, onClearInject }) {
     }
   }, [input]);
 
-  const removeFile = (f) => setAttachedFiles(files => files.filter(x => x !== f));
-
-  const executeTool = async (call) => {
-    if (call.tool === 'bash') {
-      if (!call.cmd) return 'Tool error: missing CMD';
-      const r = await fetch(`${API}/api/tool/bash`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cmd:call.cmd,sid:SID}) });
-      return JSON.stringify(await r.json());
-    }
-    if (call.tool === 'read_file') {
-      if (!call.path) return 'Tool error: missing PATH';
-      const r = await fetch(`${API}/api/tool/read_file`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:call.path,sid:SID}) });
-      return JSON.stringify(await r.json());
-    }
-    if (call.tool === 'write_file') {
-      if (!call.path) return 'Tool error: missing PATH';
-      const preview = await fetch(`${API}/api/tool/write_file/diff`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:call.path,content:call.content,sid:SID}) });
-      const diff = await preview.json();
-      if (diff.error) return `Tool error: ${diff.error}`;
-      if (!window.confirm(`Allow GLM to write ${diff.path}?\n\n${diff.patch.slice(0,12000)}`)) return 'Write rejected by user.';
-      const saved = await fetch(`${API}/api/tool/write_file/confirm`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:call.path,content:call.content,sid:SID}) });
-      return JSON.stringify(await saved.json());
-    }
-    return call.summary || 'Task complete.';
-  };
-
-  const runAgent = async (conversation, depth=0) => {
-    if (depth >= 20) throw new Error('Agent stopped after 20 tool calls');
-    const assistantMsg = { role:'assistant', content:'', thinking:'' };
-    setMessages(m => [...m, assistantMsg]);
-
-    const res = await fetch(`${API}/api/chat`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages:conversation, sid:SID, reasoning_effort:effort }),
-    });
-    if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
-
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '', content = '', thinking = '';
-    while (true) {
-      const {done,value} = await reader.read();
-      if (done) break;
-      buf += dec.decode(value,{stream:true});
-      const lines=buf.split('\n'); buf=lines.pop();
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const raw=line.slice(6).trim();
-        if (!raw || raw==='[DONE]') continue;
-        const obj=JSON.parse(raw);
-        if (obj.error) throw new Error(obj.error);
-        const delta=obj.choices?.[0]?.delta;
-        if (!delta) continue;
-        content += delta.content || '';
-        thinking += delta.reasoning_content || '';
-        setMessages(m => { const copy=[...m]; copy[copy.length-1]={...copy[copy.length-1],content,thinking}; return copy; });
-      }
-    }
-
-    const call=parseToolCall(content);
-    if (!call || call.tool==='done') return;
-    const result=await executeTool(call);
-    setMessages(m => [...m,{role:'assistant',content:`Tool result:\n\`${result.slice(0,4000)}\``}]);
-    await runAgent([...conversation,{role:'assistant',content},{role:'user',content:`Tool result:\n${result}`}],depth+1);
-  };
-
   const send = async () => {
     if (!input.trim() && attachedFiles.length === 0) return;
     if (streaming) return;
@@ -911,61 +1182,106 @@ function ChatPanel({ injectedFile, onClearInject }) {
       try {
         const r = await fetch(`${API}/api/fs/read?path=${encodeURIComponent(fp)}&sid=${encodeURIComponent(SID)}`);
         const d = await r.json();
-        if (d.content) context += `\n\n<file path="${fp}">\n${d.content.slice(0,8000)}\n</file>`;
-      } catch {}
+        if (d.content) {
+          context += `\n\n<file path="${fp}">\n${d.content.slice(0, 8000)}\n</file>`;
+        }
+      } catch (err) {
+        console.error('Failed to read file context:', err);
+      }
     }
 
     const userContent = context ? `${input}\n${context}` : input;
-    const userMsg = { role:'user', content: userContent };
-    const displayMsg = { role:'user', content: input, files: [...attachedFiles] };
+    const displayMsg = {
+      role: 'user',
+      content: input,
+      fullContent: userContent,
+      files: [...attachedFiles]
+    };
 
     setMessages(m => [...m, displayMsg]);
     setInput('');
     setAttachedFiles([]);
 
-    // build API messages (use actual content with file context)
+    // build API messages using history fullContent for correct context
     const apiMessages = [
       ...messages.filter(m => m.role !== 'system').map(m => ({
         role: m.role,
-        content: typeof m.content === 'string' ? m.content : m.content
+        content: m.role === 'user' ? (m.fullContent || m.content) : m.content
       })),
-      userMsg
+      { role: 'user', content: userContent }
     ];
 
     setStreaming(true);
+    const assistantMsg = { role: 'assistant', content: '', thinking: '' };
+    setMessages(m => [...m, assistantMsg]);
+
     try {
-      await runAgent(apiMessages);
-    } catch(e) {
-      setMessages(m => [...m,{role:'assistant',content:`Error: ${e.message}`}]);
+      const res = await fetch(`${API}/api/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages: apiMessages, sid: SID }),
+      });
+      if (!res.ok) {
+        throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '', content = '', thinking = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        const lines = buf.split('\n');
+        buf = lines.pop();
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          const raw = line.slice(6).trim();
+          if (!raw || raw === '[DONE]') continue;
+          const obj = JSON.parse(raw);
+          if (obj.error) throw new Error(obj.error);
+          const delta = obj.choices?.[0]?.delta;
+          if (!delta) continue;
+          content += delta.content || '';
+          thinking += delta.reasoning_content || '';
+          setMessages(m => {
+            const copy = [...m];
+            copy[copy.length - 1] = { ...copy[copy.length - 1], content, thinking };
+            return copy;
+          });
+        }
+      }
+    } catch (e) {
+      setMessages(m => {
+        const copy = [...m];
+        copy[copy.length - 1] = { ...copy[copy.length - 1], content: `Error: ${e.message}` };
+        return copy;
+      });
+    } finally {
+      setStreaming(false);
     }
-    setStreaming(false);
   };
 
   const onKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
   };
-
-  const clearChat = () => setMessages([
-    { role:'assistant', content:'Chat cleared.' }
-  ]);
 
   return (
     <div className="main">
-      <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 24px',borderBottom:'1px solid var(--border)',background:'var(--surface)',fontSize:12,color:'var(--muted)',flexShrink:0}}>
-        <span>Local coding agent</span>
-        <span style={{marginLeft:'auto'}}></span>
-        <button className="btn btn-ghost" style={{fontSize:11,padding:'3px 8px'}} onClick={clearChat}>Clear</button>
-      </div>
-
       <div className="chat-messages">
         {messages.map((msg, i) => (
           <div key={i} className={`msg ${msg.role}`}>
             <div className="msg-avatar">{msg.role === 'user' ? 'U' : 'G'}</div>
             <div>
               {msg.files && msg.files.length > 0 && (
-                <div style={{display:'flex',gap:4,flexWrap:'wrap',marginBottom:6}}>
-                  {msg.files.map(f => (
-                    <span key={f} className="file-pill">📄 {f.split('/').pop()}</span>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 6 }}>
+                  {msg.files.map(fp => (
+                    <div key={fp} className="file-pill" style={{ margin: 0, opacity: 0.8 }}>
+                      <span>📄 {fp.split('/').pop()}</span>
+                    </div>
                   ))}
                 </div>
               )}
@@ -974,14 +1290,14 @@ function ChatPanel({ injectedFile, onClearInject }) {
                   <div className="thinking">
                     <strong>Thinking…</strong>
                     {msg.thinking.length > 200
-                      ? <div>{msg.thinking.slice(0,200)}…</div>
+                      ? <div>{msg.thinking.slice(0, 200)}…</div>
                       : <div>{msg.thinking}</div>
                     }
                   </div>
                 )}
                 {renderMarkdown(msg.content)}
-                {msg.role === 'assistant' && streaming && i === messages.length-1 && !msg.content && (
-                  <span style={{color:'var(--muted)'}}>▌</span>
+                {msg.role === 'assistant' && streaming && i === messages.length - 1 && !msg.content && (
+                  <span style={{ color: 'var(--muted)' }}>▌</span>
                 )}
               </div>
             </div>
@@ -993,11 +1309,11 @@ function ChatPanel({ injectedFile, onClearInject }) {
       <div className="chat-input-area">
         {attachedFiles.length > 0 && (
           <div className="chat-input-files">
-            {attachedFiles.map(f => (
-              <span key={f} className="file-pill">
-                📄 {f.split('/').pop()}
-                <button onClick={() => removeFile(f)}>×</button>
-              </span>
+            {attachedFiles.map(fp => (
+              <div key={fp} className="file-pill">
+                <span>📄 {fp.split('/').pop()}</span>
+                <button title="Remove" onClick={() => setAttachedFiles(fs => fs.filter(f => f !== fp))}>×</button>
+              </div>
             ))}
           </div>
         )}
@@ -1007,24 +1323,13 @@ function ChatPanel({ injectedFile, onClearInject }) {
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={onKeyDown}
-            placeholder="Message GLM-5.2… (Shift+Enter for newline)"
+            placeholder="Message…"
             disabled={streaming}
             rows={1}
           />
-          <button className="btn btn-primary" onClick={send} disabled={streaming || (!input.trim() && attachedFiles.length===0)}>
+          <button className="btn btn-primary" onClick={send} disabled={streaming || (!input.trim() && attachedFiles.length === 0)}>
             {streaming ? '…' : '↑'}
           </button>
-        </div>
-        <div className="effort-row">
-          <span className="effort-label">Thinking:</span>
-          {['max','high','off'].map(e => (
-            <button key={e} className={`effort-btn${effort===e?' active':''}`} onClick={()=>setEffort(e)}>{e}</button>
-          ))}
-          <span className="effort-label" style={{marginLeft:8}}>
-            {effort==='max'?'Full reasoning':''}
-            {effort==='high'?'High (faster)':''}
-            {effort==='off'?'No thinking':''}
-          </span>
         </div>
       </div>
     </div>
@@ -1033,10 +1338,12 @@ function ChatPanel({ injectedFile, onClearInject }) {
 
 // ── Root App ───────────────────────────────────────────────────────────────
 function App() {
-  const [tab, setTab]           = useState('chat');
+  const [rtab, setRtab]         = useState('bash');
   const [status, setStatus]     = useState('checking');
   const [injectedFile, setInj]  = useState(null);
-  const [viewFile, setViewFile] = useState(null);
+  const [rightWidth, setRightWidth] = useState(() => Number(localStorage.getItem('glm-right-width')) || 520);
+  const [resizing, setResizing] = useState(false);
+  const [rhoMirror, setRhoMirror] = useState('');
 
   useEffect(() => {
     const check = () => {
@@ -1052,8 +1359,32 @@ function App() {
 
   const injectToChat = (fp) => {
     setInj(fp);
-    setTab('chat');
+    setRtab('bash');
   };
+
+  const resizeRight = (event) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = rightWidth;
+    setResizing(true);
+    document.body.style.cursor = 'col-resize';
+    const move = (moveEvent) => {
+      const maxWidth = Math.max(320, window.innerWidth - 420);
+      setRightWidth(Math.max(320, Math.min(maxWidth, startWidth + startX - moveEvent.clientX)));
+    };
+    const stop = () => {
+      setResizing(false);
+      document.body.style.cursor = '';
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', stop);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', stop);
+  };
+
+  useEffect(() => {
+    localStorage.setItem('glm-right-width', String(Math.round(rightWidth)));
+  }, [rightWidth]);
 
   return (
     <>
@@ -1064,21 +1395,26 @@ function App() {
         <span className="header-status">{status}</span>
       </div>
 
-      <div className="tabs">
-        {['chat','repl','files'].map(t => (
-          <div key={t} className={`tab${tab===t?' active':''}`} onClick={()=>setTab(t)}>
-            {t==='chat'?'💬 Chat': t==='repl'?'⚡ REPL':'📂 Files'}
-          </div>
-        ))}
-      </div>
-
       <div className="workspace">
-        <FileBrowser onInject={injectToChat} onOpenFile={setViewFile}/>
-
+        <FileBrowser onInject={injectToChat} onOpenFile={()=>{}}/>
         <div className="main">
-          {tab === 'chat'  && <ChatPanel injectedFile={injectedFile} onClearInject={()=>setInj(null)}/>}
-          {tab === 'repl'  && <ReplPanel/>}
-          {tab === 'files' && <FileViewerPanel filePath={viewFile}/>}
+          <ChatPanel injectedFile={injectedFile} onClearInject={()=>setInj(null)}/>
+        </div>
+        <div className={`right-resizer${resizing?' dragging':''}`} onPointerDown={resizeRight} title="Drag to resize side panel"/>
+        <div className="right" style={{width:rightWidth}}>
+          <div className="right-tabs">
+            {['bash','pi','rho','debugger'].map(t => (
+              <button key={t} className={`right-tab${rtab===t?' active':''}`} onClick={()=>setRtab(t)}>
+                {t==='bash'?'Bash':t==='pi'?'Pi':t==='rho'?'Rho':'Debug'}
+              </button>
+            ))}
+          </div>
+          <div className="main">
+            {rtab === 'bash' && <ReplPanel/>}
+            {rtab === 'pi' && <KaiConsolePanel mode="pi" rhoMirror={rhoMirror}/>}
+            {rtab === 'rho' && <KaiConsolePanel mode="rho" rhoMirror={rhoMirror} onMirrorChange={setRhoMirror}/>}
+            {rtab === 'debugger' && <KaiConsolePanel mode="debugger"/>}
+          </div>
         </div>
       </div>
     </>
