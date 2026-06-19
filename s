@@ -102,6 +102,7 @@ const Diff=require('diff');
 const app=express();
 app.use(cors());
 app.use(express.json({limit:'16mb'}));
+app.use(express.static(__dirname));
 
 const OLLAMA=process.env.GLM_BASE_URL||'http://localhost:11434';
 const ROOT  =process.env.SAFE_ROOT   ||process.env.HOME||'/tmp';
@@ -201,8 +202,16 @@ app.post('/api/chat',(req,res)=>{
   res.setHeader('Connection','keep-alive');
   const up=http.request({hostname:url.hostname,port:url.port||80,path:url.pathname,method:'POST',
     headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)}},
-    r=>{r.on('data',c=>res.write(c));r.on('end',()=>res.end());});
+    r=>{
+      if(r.statusCode>=400){
+        let body='';r.on('data',chunk=>body+=chunk);r.on('end',()=>{
+          res.write(`data: ${JSON.stringify({error:`Ollama HTTP ${r.statusCode}: ${body.slice(0,500)}`})}\n\n`);res.end();
+        });return;
+      }
+      r.on('data',c=>res.write(c));r.on('end',()=>res.end());
+    });
   up.on('error',e=>{res.write(`data: ${JSON.stringify({error:e.message})}\n\n`);res.end();});
+  up.setTimeout(120000,()=>up.destroy(new Error('Ollama request timed out')));
   up.write(payload);up.end();
 });
 
@@ -344,7 +353,9 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sa);font-size:13px;d
 .layout{display:flex;flex:1;overflow:hidden}
 .sidebar{width:200px;background:var(--sf);border-right:1px solid var(--bd);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
 .center{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
-.right{width:520px;background:var(--sf);border-left:1px solid var(--bd);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
+.right-resizer{width:5px;cursor:col-resize;background:var(--bd);flex-shrink:0;transition:background .12s;touch-action:none}
+.right-resizer:hover,.right-resizer.dragging{background:var(--ac)}
+.right{background:var(--sf);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;min-width:320px}
 .plabel{padding:6px 12px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--mu);border-bottom:1px solid var(--bd);flex-shrink:0}
 .cwd-bar{padding:4px 10px;font-size:10px;font-family:var(--mo);color:var(--mu);background:var(--ra);border-bottom:1px solid var(--bd);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex-shrink:0}
 .ftree{flex:1;overflow-y:auto;padding:4px 0}
@@ -415,7 +426,7 @@ body{background:var(--bg);color:var(--tx);font-family:var(--sa);font-size:13px;d
 <div id="root"></div>
 <script type="text/babel">
 const {useState,useEffect,useRef,useCallback}=React;
-const API='http://localhost:3001';
+const API=window.location.origin;
 const SID=Math.random().toString(36).slice(2);
 ace.config.set('basePath','https://cdnjs.cloudflare.com/ajax/libs/ace/1.36.5/');
 
@@ -814,8 +825,17 @@ function AgentChat(){
 
   // Stream one LLM response; returns full text
   const streamGLM=async(history)=>{
-    const res=await fetch(`${API}/api/chat`,{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({messages:history,sid:SID})});
+    let res;
+    try{
+      res=await fetch(`${API}/api/chat`,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({messages:history,sid:SID})});
+    }catch(error){
+      throw new Error(`Cannot reach GLM server at ${API}. Restart ./s. (${error.message})`);
+    }
+    if(!res.ok){
+      const body=await res.text();
+      throw new Error(`GLM server HTTP ${res.status}: ${body.slice(0,500)}`);
+    }
     let full='';
     const reader=res.body.getReader();const dec=new TextDecoder();let buf='';
     // Insert placeholder agent message first
@@ -829,17 +849,18 @@ function AgentChat(){
       buf+=dec.decode(value,{stream:true});const ls=buf.split('\n');buf=ls.pop();
       for(const line of ls){
         if(!line.startsWith('data: '))continue;const raw=line.slice(6).trim();if(raw==='[DONE]')continue;
-        try{const obj=JSON.parse(raw);const d=obj.choices?.[0]?.delta;if(!d?.content)continue;
-          full+=d.content;
-          // Show cleaned text while streaming
-          setMsgs(ms=>{
-            const c=[...ms];
-            // find last agent streaming msg
-            const i=c.map(m=>m.streaming).lastIndexOf(true);
-            if(i>=0)c[i]={...c[i],text:stripTools(full)};
-            return c;
-          });
-        }catch{}
+        let obj;try{obj=JSON.parse(raw);}catch{continue;}
+        if(obj.error)throw new Error(String(obj.error));
+        const d=obj.choices?.[0]?.delta;if(!d?.content)continue;
+        full+=d.content;
+        // Show cleaned text while streaming
+        setMsgs(ms=>{
+          const c=[...ms];
+          // find last agent streaming msg
+          const i=c.map(m=>m.streaming).lastIndexOf(true);
+          if(i>=0)c[i]={...c[i],text:stripTools(full)};
+          return c;
+        });
       }
     }
     // Mark done streaming, attach parsed tools
@@ -1000,6 +1021,8 @@ function App(){
   const [msOk,setMsOk]=useState(false);
   const [rtab,setRtab]=useState('bash');
   const [openFile,setOpenFile]=useState(null);
+  const [rightWidth,setRightWidth]=useState(()=>Number(localStorage.getItem('glm-right-width'))||520);
+  const [resizing,setResizing]=useState(false);
 
   useEffect(()=>{
     const chk=()=>{
@@ -1010,6 +1033,21 @@ function App(){
   },[]);
 
   const handleOpen=fp=>{setOpenFile(fp);setRtab('file');};
+  const resizeRight=event=>{
+    event.preventDefault();
+    const startX=event.clientX,startWidth=rightWidth;
+    setResizing(true);document.body.style.cursor='col-resize';
+    const move=moveEvent=>{
+      const maxWidth=Math.max(320,window.innerWidth-420);
+      setRightWidth(Math.max(320,Math.min(maxWidth,startWidth+startX-moveEvent.clientX)));
+    };
+    const stop=()=>{
+      setResizing(false);document.body.style.cursor='';
+      window.removeEventListener('pointermove',move);window.removeEventListener('pointerup',stop);
+    };
+    window.addEventListener('pointermove',move);window.addEventListener('pointerup',stop);
+  };
+  useEffect(()=>{localStorage.setItem('glm-right-width',String(Math.round(rightWidth)));},[rightWidth]);
 
   return(
     <div className="app">
@@ -1031,7 +1069,8 @@ function App(){
         <div className="center">
           <AgentChat/>
         </div>
-        <div className="right">
+        <div className={`right-resizer${resizing?' dragging':''}`} onPointerDown={resizeRight} title="Drag to resize side panel"/>
+        <div className="right" style={{width:rightWidth}}>
           <div className="tabs">
             {[['bash','Bash'],['pi','Pi'],['rho','Rho'],['debugger','Debug'],['file','File'],['ms','Store']].map(([t,l])=>(
               <div key={t} className={`tab${rtab===t?' a':''}`} onClick={()=>setRtab(t)}>{l}</div>
@@ -1061,19 +1100,35 @@ INDEXHTML
 [ ! -d node_modules ] && { info "Installing Node dependencies…"; npm install --silent; }
 ok "Node dependencies ready"
 
-# ── Open browser ───────────────────────────────────────────────────────────
-HTML="$DIR/index.html"
+# ── Start server, then open browser ────────────────────────────────────────
+GLM_BASE_URL="http://localhost:${OLLAMA_PORT}" GLM_MODEL="$MODEL" SAFE_ROOT="$HOME" \
+MS_DIR="$MS_DIR" KAI_DIR="$KAI_DIR" KAI_CONSOLE="$KAI_CONSOLE" node server.js &
+SERVER_PID=$!
+trap 'kill "$SERVER_PID" 2>/dev/null || true' INT TERM EXIT
+
+sleep .2
+kill -0 "$SERVER_PID" 2>/dev/null || { wait "$SERVER_PID" || true; die "GLM server failed to start"; }
+for i in $(seq 1 50); do
+  curl -sf "http://localhost:${NODE_PORT}/api/health" &>/dev/null && break
+  kill -0 "$SERVER_PID" 2>/dev/null || { wait "$SERVER_PID" || true; die "GLM server stopped during startup"; }
+  [ "$i" -eq 50 ] && die "GLM server did not become ready"
+  sleep .1
+done
+
+APP_URL="http://localhost:${NODE_PORT}/"
 if grep -qi microsoft /proc/version 2>/dev/null; then
-  (cmd.exe /c start "" "$(wslpath -w "$HTML")" 2>/dev/null || true) &
+  (cmd.exe /c start "" "$APP_URL" 2>/dev/null || true) &
 else
-  (xdg-open "$HTML" 2>/dev/null || open "$HTML" 2>/dev/null || true) &
+  (xdg-open "$APP_URL" 2>/dev/null || open "$APP_URL" 2>/dev/null || true) &
 fi
 
 echo ""
 echo -e "${G}  glm-code ready.${X}"
-echo -e "  App:    file://${HTML}"
+echo -e "  App:    ${APP_URL}"
 echo -e "  Server: http://localhost:${NODE_PORT}"
 echo -e "  Model:  ${MODEL} via Ollama\n"
 
-GLM_BASE_URL="http://localhost:${OLLAMA_PORT}" GLM_MODEL="$MODEL" SAFE_ROOT="$HOME" \
-MS_DIR="$MS_DIR" KAI_DIR="$KAI_DIR" KAI_CONSOLE="$KAI_CONSOLE" node server.js
+STATUS=0
+wait "$SERVER_PID" || STATUS=$?
+trap - INT TERM EXIT
+exit "$STATUS"

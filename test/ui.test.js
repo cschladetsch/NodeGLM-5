@@ -71,3 +71,20 @@ test('./s Bash REPL supports the advertised server-side cwd command',()=>{
   assert.match(launcher,/if\(!running\)inputRef\.current\?\.focus\(\)/);
   assert.match(launcher,/<input ref=\{inputRef\} value=\{inp\}/);
 });
+
+test('./s serves the UI after health is ready and supports side-panel resizing',()=>{
+  assert.match(launcher,/app\.use\(express\.static\(__dirname\)\)/);
+  assert.match(launcher,/const API=window\.location\.origin/);
+  assert.match(launcher,/curl -sf "http:\/\/localhost:\$\{NODE_PORT\}\/api\/health"/);
+  assert.match(launcher,/APP_URL="http:\/\/localhost:\$\{NODE_PORT\}\/"/);
+  assert.match(launcher,/className=\{`right-resizer\$\{resizing\?' dragging':''\}`\}/);
+  assert.match(launcher,/onPointerDown=\{resizeRight\}/);
+  assert.match(launcher,/localStorage\.setItem\('glm-right-width'/);
+});
+
+test('./s reports actionable chat transport and Ollama failures',()=>{
+  assert.match(launcher,/Cannot reach GLM server at \$\{API\}\. Restart \.\/s/);
+  assert.match(launcher,/Ollama HTTP \$\{r\.statusCode\}/);
+  assert.match(launcher,/if\(obj\.error\)throw new Error/);
+  assert.match(launcher,/Ollama request timed out/);
+});
