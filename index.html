@@ -3,10 +3,11 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>GLM-5.2 · Dev Console</title>
+<title>GLM Code Console</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.5/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ace/1.36.5/ace.js"></script>
 <style>
   /* ── design tokens ── */
   :root {
@@ -417,14 +418,8 @@
   }
   .file-viewer-content {
     flex: 1;
-    overflow: auto;
     background: var(--bg);
-    padding: 16px;
-    font-family: var(--mono);
-    font-size: 12px;
-    line-height: 1.7;
-    white-space: pre;
-    color: var(--text);
+    min-height: 0;
   }
   .file-viewer-empty {
     flex: 1;
@@ -462,7 +457,28 @@
 <script type="text/babel">
 const { useState, useEffect, useRef, useCallback } = React;
 
-const API = 'http://localhost:3001';
+// Prefer the server that delivered the UI. Retain direct file:// support for
+// local use, where there is no page origin to target.
+const API = window.location.protocol === 'file:'
+  ? 'http://localhost:3001'
+  : window.location.origin;
+ace.config.set('basePath','https://cdnjs.cloudflare.com/ajax/libs/ace/1.36.5/');
+const SID = sessionStorage.getItem('glm-code-sid') ||
+  (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+sessionStorage.setItem('glm-code-sid', SID);
+
+function parseToolCall(text) {
+  const match = text.trim().match(/^TOOL:(bash|read_file|write_file|done)\s*\n([\s\S]*?)\nEND_TOOL\s*$/);
+  if (!match) return null;
+  const [, tool, body] = match;
+  if (tool === 'bash') return { tool, cmd: (body.match(/^CMD:([\s\S]*)$/m)||[])[1]?.trim() };
+  if (tool === 'read_file') return { tool, path: (body.match(/^PATH:([\s\S]*)$/m)||[])[1]?.trim() };
+  if (tool === 'write_file') {
+    const parsed = body.match(/^PATH:(.*?)\nCONTENT:\n?([\s\S]*)$/);
+    return parsed ? { tool, path: parsed[1].trim(), content: parsed[2] } : null;
+  }
+  return { tool, summary: (body.match(/^SUMMARY:([\s\S]*)$/m)||[])[1]?.trim() || body.trim() };
+}
 
 // ── tiny markdown renderer ──────────────────────────────────────────────────
 function renderMarkdown(text) {
@@ -536,7 +552,7 @@ function FileBrowser({ onInject, onOpenFile }) {
 
   const load = useCallback((p) => {
     setErr(null);
-    fetch(`${API}/api/fs/list?path=${encodeURIComponent(p)}`)
+    fetch(`${API}/api/fs/list?path=${encodeURIComponent(p)}&sid=${encodeURIComponent(SID)}`)
       .then(r => r.json())
       .then(d => { if (d.error) { setErr(d.error); } else { setEntries(d.entries); setCurPath(d.path); } })
       .catch(e => setErr(e.message));
@@ -621,20 +637,16 @@ function ReplPanel({ cwd }) {
     setLines(l => [...l, { type:'cmd', text: cmd }]);
     setRunning(true);
     try {
-      const r = await fetch(`${API}/api/repl/exec`, {
+      const r = await fetch(`${API}/api/tool/bash`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cmd, cwd: replCwd, timeout: 15000 }),
+        body: JSON.stringify({ cmd, sid: SID }),
       });
       const d = await r.json();
       if (d.stdout) d.stdout.split('\n').filter(Boolean).forEach(l => setLines(ls => [...ls, { type:'out', text: l }]));
       if (d.stderr) d.stderr.split('\n').filter(Boolean).forEach(l => setLines(ls => [...ls, { type:'err', text: l }]));
       setLines(ls => [...ls, { type:'info', text: `exit ${d.exitCode}` }]);
-      // track cd
-      if (cmd.trim().startsWith('cd ')) {
-        const dir = cmd.trim().slice(3).trim();
-        setReplCwd(p => dir.startsWith('/') ? dir : (p ? `${p}/${dir}` : dir));
-      }
+      if (d.cwd) setReplCwd(d.cwd);
     } catch(e) {
       setLines(ls => [...ls, { type:'err', text: e.message }]);
     }
@@ -691,21 +703,81 @@ function ReplPanel({ cwd }) {
   );
 }
 
-// ── File viewer panel ───────────────────────────────────────────────────────
+function aceMode(filePath) {
+  const ext=(filePath.split('.').pop()||'').toLowerCase();
+  const modes={
+    c:'c_cpp',cc:'c_cpp',cpp:'c_cpp',cxx:'c_cpp',h:'c_cpp',hh:'c_cpp',hpp:'c_cpp',
+    js:'javascript',jsx:'javascript',mjs:'javascript',ts:'typescript',tsx:'typescript',
+    py:'python',rb:'ruby',rs:'rust',go:'golang',java:'java',sh:'sh',bash:'sh',zsh:'sh',
+    html:'html',htm:'html',css:'css',scss:'scss',json:'json',yaml:'yaml',yml:'yaml',
+    md:'markdown',xml:'xml',sql:'sql',cmake:'cmake',dockerfile:'dockerfile'
+  };
+  const name=filePath.split('/').pop().toLowerCase();
+  if(name==='makefile')return 'makefile';
+  if(name==='dockerfile')return 'dockerfile';
+  return modes[ext]||'text';
+}
+
+// ── File editor panel ───────────────────────────────────────────────────────
 function FileViewerPanel({ filePath }) {
   const [content, setContent] = useState(null);
   const [err, setErr] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [notice, setNotice] = useState('');
+  const editorEl = useRef(null);
+  const aceRef = useRef(null);
+  const suppressChange = useRef(false);
+  const saveRef = useRef(null);
 
   useEffect(() => {
     if (!filePath) { setContent(null); setErr(null); return; }
-    setLoading(true); setErr(null); setContent(null);
-    fetch(`${API}/api/fs/read?path=${encodeURIComponent(filePath)}`)
+    setLoading(true); setErr(null); setContent(null); setDirty(false); setNotice('');
+    fetch(`${API}/api/fs/read?path=${encodeURIComponent(filePath)}&sid=${encodeURIComponent(SID)}`)
       .then(r => r.json())
       .then(d => { if (d.error) setErr(d.error); else setContent(d.content); })
       .catch(e => setErr(e.message))
       .finally(() => setLoading(false));
   }, [filePath]);
+
+  const save = async () => {
+    if (!filePath || !aceRef.current || saving) return;
+    setSaving(true); setErr(null); setNotice('');
+    try {
+      const response=await fetch(`${API}/api/fs/write`,{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({path:filePath,content:aceRef.current.getValue()})
+      });
+      const result=await response.json();
+      if(!response.ok||result.error)throw new Error(result.error||`HTTP ${response.status}`);
+      setDirty(false); setNotice('Saved');
+    } catch(e) { setErr(e.message); }
+    setSaving(false);
+  };
+  saveRef.current=save;
+
+  useEffect(() => {
+    if(content==null||!editorEl.current)return;
+    let editor=aceRef.current;
+    if(!editor){
+      editor=ace.edit(editorEl.current);
+      aceRef.current=editor;
+      editor.setTheme('ace/theme/monokai');
+      editor.setKeyboardHandler('ace/keyboard/vim');
+      editor.setOptions({fontSize:'13px',showPrintMargin:false,useWorker:false});
+      editor.session.on('change',()=>{if(!suppressChange.current){setDirty(true);setNotice('');}});
+      editor.commands.addCommand({name:'saveFile',bindKey:{win:'Ctrl-S',mac:'Command-S'},exec:()=>saveRef.current?.()});
+    }
+    suppressChange.current=true;
+    editor.session.setMode(`ace/mode/${aceMode(filePath)}`);
+    editor.setValue(content,-1);
+    editor.clearSelection();
+    suppressChange.current=false;
+    editor.resize();
+  },[content,filePath]);
+
+  useEffect(() => () => { aceRef.current?.destroy(); aceRef.current=null; }, []);
 
   if (!filePath) return (
     <div className="file-viewer-empty">
@@ -719,11 +791,15 @@ function FileViewerPanel({ filePath }) {
       <div className="file-viewer-header">
         <span>📄</span>
         <span style={{flex:1, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>{filePath}</span>
-        {content != null && <span style={{fontSize:10}}>{content.split('\n').length} lines</span>}
+        {dirty && <span style={{color:'var(--warn)'}}>Modified</span>}
+        {notice && <span style={{color:'var(--accent2)'}}>{notice}</span>}
+        <span style={{fontSize:10}}>Vim · {aceMode(filePath)}</span>
+        <button className="btn btn-primary" style={{fontSize:11,padding:'4px 10px'}}
+          onClick={save} disabled={saving||!dirty}>{saving?'Saving…':'Save'}</button>
       </div>
       {loading && <div className="file-viewer-empty"><span>Loading…</span></div>}
-      {err && <div className="file-viewer-empty" style={{color:'var(--warn)'}}><span>{err}</span></div>}
-      {content != null && <div className="file-viewer-content">{content}</div>}
+      {err && <div style={{padding:'6px 16px',color:'var(--warn)',background:'var(--surface)',fontSize:11}}>{err}</div>}
+      <div ref={editorEl} className="file-viewer-content" style={{display:content==null?'none':'block'}}/>
     </div>
   );
 }
@@ -731,7 +807,7 @@ function FileViewerPanel({ filePath }) {
 // ── Chat panel ─────────────────────────────────────────────────────────────
 function ChatPanel({ injectedFile, onClearInject }) {
   const [messages, setMessages] = useState([
-    { role:'assistant', content:'GLM-5.2 ready. Ask anything or inject a local file to discuss it.' }
+    { role:'assistant', content:'GLM Code ready. Ask for a change or inject a local file.' }
   ]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -761,6 +837,70 @@ function ChatPanel({ injectedFile, onClearInject }) {
 
   const removeFile = (f) => setAttachedFiles(files => files.filter(x => x !== f));
 
+  const executeTool = async (call) => {
+    if (call.tool === 'bash') {
+      if (!call.cmd) return 'Tool error: missing CMD';
+      const r = await fetch(`${API}/api/tool/bash`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({cmd:call.cmd,sid:SID}) });
+      return JSON.stringify(await r.json());
+    }
+    if (call.tool === 'read_file') {
+      if (!call.path) return 'Tool error: missing PATH';
+      const r = await fetch(`${API}/api/tool/read_file`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:call.path,sid:SID}) });
+      return JSON.stringify(await r.json());
+    }
+    if (call.tool === 'write_file') {
+      if (!call.path) return 'Tool error: missing PATH';
+      const preview = await fetch(`${API}/api/tool/write_file/diff`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:call.path,content:call.content,sid:SID}) });
+      const diff = await preview.json();
+      if (diff.error) return `Tool error: ${diff.error}`;
+      if (!window.confirm(`Allow GLM to write ${diff.path}?\n\n${diff.patch.slice(0,12000)}`)) return 'Write rejected by user.';
+      const saved = await fetch(`${API}/api/tool/write_file/confirm`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({path:call.path,content:call.content,sid:SID}) });
+      return JSON.stringify(await saved.json());
+    }
+    return call.summary || 'Task complete.';
+  };
+
+  const runAgent = async (conversation, depth=0) => {
+    if (depth >= 20) throw new Error('Agent stopped after 20 tool calls');
+    const assistantMsg = { role:'assistant', content:'', thinking:'' };
+    setMessages(m => [...m, assistantMsg]);
+
+    const res = await fetch(`${API}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages:conversation, sid:SID, reasoning_effort:effort }),
+    });
+    if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '', content = '', thinking = '';
+    while (true) {
+      const {done,value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value,{stream:true});
+      const lines=buf.split('\n'); buf=lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const raw=line.slice(6).trim();
+        if (!raw || raw==='[DONE]') continue;
+        const obj=JSON.parse(raw);
+        if (obj.error) throw new Error(obj.error);
+        const delta=obj.choices?.[0]?.delta;
+        if (!delta) continue;
+        content += delta.content || '';
+        thinking += delta.reasoning_content || '';
+        setMessages(m => { const copy=[...m]; copy[copy.length-1]={...copy[copy.length-1],content,thinking}; return copy; });
+      }
+    }
+
+    const call=parseToolCall(content);
+    if (!call || call.tool==='done') return;
+    const result=await executeTool(call);
+    setMessages(m => [...m,{role:'assistant',content:`Tool result:\n\`${result.slice(0,4000)}\``}]);
+    await runAgent([...conversation,{role:'assistant',content},{role:'user',content:`Tool result:\n${result}`}],depth+1);
+  };
+
   const send = async () => {
     if (!input.trim() && attachedFiles.length === 0) return;
     if (streaming) return;
@@ -769,7 +909,7 @@ function ChatPanel({ injectedFile, onClearInject }) {
     let context = '';
     for (const fp of attachedFiles) {
       try {
-        const r = await fetch(`${API}/api/fs/read?path=${encodeURIComponent(fp)}`);
+        const r = await fetch(`${API}/api/fs/read?path=${encodeURIComponent(fp)}&sid=${encodeURIComponent(SID)}`);
         const d = await r.json();
         if (d.content) context += `\n\n<file path="${fp}">\n${d.content.slice(0,8000)}\n</file>`;
       } catch {}
@@ -793,60 +933,10 @@ function ChatPanel({ injectedFile, onClearInject }) {
     ];
 
     setStreaming(true);
-    const assistantMsg = { role:'assistant', content:'', thinking:'' };
-    setMessages(m => [...m, assistantMsg]);
-
     try {
-      const res = await fetch(`${API}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: apiMessages,
-          reasoning_effort: effort === 'max' ? 'max' : 'high',
-        }),
-      });
-
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop();
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const raw = line.slice(6).trim();
-          if (raw === '[DONE]') continue;
-          try {
-            const obj = JSON.parse(raw);
-            const delta = obj.choices?.[0]?.delta;
-            if (!delta) continue;
-            if (delta.reasoning_content) {
-              setMessages(m => {
-                const copy = [...m];
-                copy[copy.length-1] = { ...copy[copy.length-1], thinking: (copy[copy.length-1].thinking||'') + delta.reasoning_content };
-                return copy;
-              });
-            }
-            if (delta.content) {
-              setMessages(m => {
-                const copy = [...m];
-                copy[copy.length-1] = { ...copy[copy.length-1], content: copy[copy.length-1].content + delta.content };
-                return copy;
-              });
-            }
-          } catch {}
-        }
-      }
+      await runAgent(apiMessages);
     } catch(e) {
-      setMessages(m => {
-        const copy = [...m];
-        copy[copy.length-1] = { ...copy[copy.length-1], content:`Error: ${e.message}` };
-        return copy;
-      });
+      setMessages(m => [...m,{role:'assistant',content:`Error: ${e.message}`}]);
     }
     setStreaming(false);
   };
@@ -862,7 +952,7 @@ function ChatPanel({ injectedFile, onClearInject }) {
   return (
     <div className="main">
       <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 24px',borderBottom:'1px solid var(--border)',background:'var(--surface)',fontSize:12,color:'var(--muted)',flexShrink:0}}>
-        <span>GLM-5.2 · 1M context · MIT</span>
+        <span>Local coding agent</span>
         <span style={{marginLeft:'auto'}}></span>
         <button className="btn btn-ghost" style={{fontSize:11,padding:'3px 8px'}} onClick={clearChat}>Clear</button>
       </div>
