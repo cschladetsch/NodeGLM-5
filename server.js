@@ -6,7 +6,7 @@ const OLLAMA=process.env.GLM_BASE_URL||'http://localhost:11434';
 const ROOT  =fs.realpathSync(path.resolve(process.env.SAFE_ROOT||process.env.HOME||'/tmp'));
 const PORT  =process.env.PORT        ||3001;
 const HOST  =process.env.HOST        ||'127.0.0.1';
-const MODEL =process.env.GLM_MODEL   ||'glm4:9b';
+const DEFAULT_MODEL=process.env.GLM_MODEL||'glm4:9b';
 const GLM_TIMEOUT_MS=Math.max(1000,Number(process.env.GLM_TIMEOUT_MS)||120000);
 const GLM_MAX_TOKENS=Math.max(256,Number(process.env.GLM_MAX_TOKENS)||4096);
 const GLM_HISTORY_MESSAGES=Math.max(4,Number(process.env.GLM_HISTORY_MESSAGES)||40);
@@ -46,7 +46,7 @@ function sess(sid){
       if(oldestKey!==undefined)sessions.delete(oldestKey);
     }
   }
-  if(!sessions.has(sid))sessions.set(sid,{cwd:ROOT,lastUsed:now});
+  if(!sessions.has(sid))sessions.set(sid,{cwd:ROOT,model:DEFAULT_MODEL,lastUsed:now});
   const session=sessions.get(sid);
   session.lastUsed=now;
   return session;
@@ -135,7 +135,7 @@ app.post('/api/chat',(req,res)=>{
   const augmented=[...recent.slice(0,-1),
     {...last,content:last.content+`\n\n[cwd: ${s.cwd}]`}];
   const payload=JSON.stringify({
-    model:MODEL,
+    model:s.model,
     messages:[{role:'system',content:SYSTEM},...augmented],
     temperature:0.1,
     max_tokens:GLM_MAX_TOKENS,
@@ -231,7 +231,52 @@ app.post('/api/repl/exec',async(req,res)=>{
 
 app.get('/api/session',(req,res)=>{
   const s=sess(req.query.sid||'default');
-  res.json({cwd:s.cwd,root:ROOT});
+  res.json({cwd:s.cwd,model:s.model,root:ROOT});
+});
+
+function availableModels(){
+  return new Promise((resolve,reject)=>{
+    const url=new URL('/v1/models',OLLAMA);
+    const transport=url.protocol==='https:'?https:http;
+    const request=transport.get({hostname:url.hostname,port:url.port||(url.protocol==='https:'?443:80),path:url.pathname},response=>{
+      let body='';
+      response.on('data',chunk=>{if(body.length<2*1024*1024)body+=chunk;});
+      response.on('end',()=>{
+        if((response.statusCode||500)>=400)return reject(new Error(`Model endpoint HTTP ${response.statusCode}`));
+        try{
+          const parsed=JSON.parse(body);
+          resolve((parsed.data||[]).map(item=>item.id).filter(id=>typeof id==='string').sort());
+        }catch(error){reject(new Error(`Invalid model list: ${error.message}`));}
+      });
+    });
+    request.setTimeout(5000,()=>request.destroy(new Error('Model list timed out')));
+    request.on('error',reject);
+  });
+}
+
+app.get('/api/models',async(req,res)=>{
+  try{
+    const s=sess(req.query.sid||'default');
+    res.json({models:await availableModels(),selected:s.model});
+  }catch(error){res.status(502).json({error:error.message});}
+});
+
+function selectSessionModel(sid,model,models){
+  if(typeof model!=='string')throw new Error('model required');
+  if(!models.includes(model))throw new Error('model is not installed');
+  const s=sess(sid||'default');
+  s.model=model;
+  return s.model;
+}
+
+app.post('/api/session/model',async(req,res)=>{
+  try{
+    const models=await availableModels();
+    res.json({ok:true,model:selectSessionModel(req.body.sid,req.body.model,models)});
+  }catch(error){
+    const clientError=/^(model required|model is not installed)$/.test(error.message);
+    res.status(clientError?400:502).json({error:error.message});
+  }
 });
 
 // Browser and agent filesystem operations share the session working directory.
@@ -272,7 +317,8 @@ app.get('/api/health',(_req,res)=>{
   let settled=false;
   const finish=(ok,error)=>{
     if(settled)return;settled=true;
-    res.status(ok?200:503).json({ok,inference:ok,model:MODEL,ollama:OLLAMA,root:ROOT,...(error?{error}:{})});
+    const s=sess(_req.query.sid||'default');
+    res.status(ok?200:503).json({ok,inference:ok,model:s.model,ollama:OLLAMA,root:ROOT,...(error?{error}:{})});
   };
   const check=transport.get({hostname:url.hostname,port:url.port||(url.protocol==='https:'?443:80),path:url.pathname},upstream=>{
     upstream.resume();
@@ -408,7 +454,7 @@ if(require.main===module){
     }
     throw error;
   });
-  server.listen(PORT,HOST,()=>console.log(`  glm-code http://${HOST}:${PORT}  model=${MODEL}  root=${ROOT}`));
+  server.listen(PORT,HOST,()=>console.log(`  glm-code http://${HOST}:${PORT}  model=${DEFAULT_MODEL}  root=${ROOT}`));
 }
 
-module.exports={app,server,safe,validSessionId};
+module.exports={app,server,safe,validSessionId,selectSessionModel};

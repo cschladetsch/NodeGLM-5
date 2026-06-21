@@ -57,6 +57,7 @@ Open `http://localhost:3001/` in a browser. Opening `index.html` directly via
 - **Coding agent** — streamed chat with a bounded shell, read, and write tool loop
 - **Tool approval** — approves shell commands and previews diffs before writes
 - **Cancellation** — stops an active model generation from the chat input
+- **Model selector** — switches between models installed in the active endpoint
 - **Ace file editor** — Monokai theme, Vim bindings, syntax modes, and direct save
 - **File browser** sidebar — click to edit, or inject up to 8 KB into chat context
 - **Shell REPL** — one-shot exec with cwd tracking, command history (↑/↓)
@@ -75,6 +76,9 @@ Open `http://localhost:3001/` in a browser. Opening `index.html` directly via
 | `GLM_TIMEOUT_MS` | `120000`              | Model request timeout in milliseconds |
 | `GLM_MAX_TOKENS` | `4096`                | Maximum generated tokens per response |
 | `GLM_HISTORY_MESSAGES` | `40`            | Recent messages sent to the model     |
+| `MODEL_CACHE_ROOT` | `~/.models`          | Root for local model caches           |
+| `OLLAMA_MODELS` | `~/.models/ollama`       | Ollama model cache                    |
+| `HF_HOME`       | `~/.models/hf`           | Hugging Face model cache              |
 
 ## Security note
 

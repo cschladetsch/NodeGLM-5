@@ -69,6 +69,18 @@
     color: var(--muted);
     font-family: var(--mono);
   }
+  .model-select {
+    min-width: 150px;
+    max-width: 260px;
+    padding: 5px 28px 5px 8px;
+    color: var(--text);
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font: 11px var(--mono);
+    outline: none;
+  }
+  .model-select:focus { border-color: var(--accent); }
   .header-dot {
     width: 8px; height: 8px;
     border-radius: 50%;
@@ -1506,17 +1518,48 @@ function App() {
   const [rhoMirror, setRhoMirror] = useState('');
   const [cwd, setCwd]             = useState('');
   const [viewFile, setViewFile]   = useState(null);
+  const [models, setModels]       = useState([]);
+  const [selectedModel, setSelectedModel] = useState('');
+  const [modelError, setModelError] = useState('');
 
   useEffect(() => {
     const check = () => {
-      fetch(`${API}/api/health`)
+      fetch(`${API}/api/health?sid=${encodeURIComponent(SID)}`)
         .then(r => {if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();})
-        .then(() => setStatus('online'))
+        .then(data => {setStatus('online');if(data.model)setSelectedModel(data.model);})
         .catch(() => setStatus('error'));
     };
     check();
     const t = setInterval(check, 8000);
     return () => clearInterval(t);
+  }, []);
+
+  const chooseModel = async (model) => {
+    setModelError('');
+    try{
+      const response=await fetch(`${API}/api/session/model`,{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({sid:SID,model}),
+      });
+      const result=await response.json();
+      if(!response.ok||result.error)throw new Error(result.error||`HTTP ${response.status}`);
+      setSelectedModel(result.model);
+      localStorage.setItem('glm-selected-model',result.model);
+    }catch(error){setModelError(error.message);}
+  };
+
+  useEffect(() => {
+    fetch(`${API}/api/models?sid=${encodeURIComponent(SID)}`)
+      .then(response=>response.json().then(body=>({response,body})))
+      .then(({response,body})=>{
+        if(!response.ok||body.error)throw new Error(body.error||`HTTP ${response.status}`);
+        setModels(body.models||[]);
+        const preferred=localStorage.getItem('glm-selected-model');
+        const next=preferred&&body.models.includes(preferred)?preferred:body.selected;
+        setSelectedModel(next);
+        if(next&&next!==body.selected)chooseModel(next);
+      })
+      .catch(error=>setModelError(error.message));
   }, []);
 
   useEffect(() => {
@@ -1559,7 +1602,11 @@ function App() {
     <>
       <div className="header">
         <span className="header-logo">GLM</span>
-        <span className="header-model">5.2 · local</span>
+        <select className="model-select" value={selectedModel} onChange={event=>chooseModel(event.target.value)}
+          disabled={models.length===0} title={modelError||'Active model'}>
+          {models.length===0 && <option value="">No models found</option>}
+          {models.map(model=><option key={model} value={model}>{model}</option>)}
+        </select>
         <span className="header-dot" style={{background: status==='online'?'var(--accent2)': status==='error'?'var(--warn)':'#555', boxShadow: status==='online'?'0 0 6px var(--accent2)':undefined }}/>
         <span className="header-status">{status}</span>
         <span className="header-model" title={cwd}>{cwd || '~'}</span>

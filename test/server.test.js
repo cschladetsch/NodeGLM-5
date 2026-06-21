@@ -6,7 +6,7 @@ const path = require('node:path');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'glm-code-test-'));
 process.env.SAFE_ROOT = root;
-const {app, safe, validSessionId} = require('../server');
+const {app, safe, validSessionId, selectSessionModel} = require('../server');
 
 test.after(() => {
   fs.rmSync(root, {recursive:true, force:true});
@@ -64,6 +64,13 @@ test('API rejects malformed session identifiers', async () => {
   assert.equal(validSessionId('../escape'),false);
   assert.equal(validSessionId('__proto__'),true);
   assert.equal(validSessionId('x'.repeat(129)),false);
+});
+
+test('model selection is session-scoped and limited to installed models', async () => {
+  assert.equal(selectSessionModel('model-a','qwen:7b',['qwen:7b','glm:9b']),'qwen:7b');
+  assert.equal(selectSessionModel('model-b','glm:9b',['qwen:7b','glm:9b']),'glm:9b');
+  assert.throws(()=>selectSessionModel('model-a','missing:1b',['qwen:7b']),/not installed/);
+  assert.throws(()=>selectSessionModel('model-a',null,['qwen:7b']),/required/);
 });
 
 test('browser editor writes ROOT-relative files', async () => {

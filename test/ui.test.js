@@ -37,6 +37,16 @@ test('RHS Bash cwd is propagated to the file browser',()=>{
   assert.match(html,/api\/session\?sid=/);
 });
 
+test('header selects among models installed in the active endpoint',()=>{
+  assert.match(html,/className="model-select"/);
+  assert.match(html,/api\/models\?sid=/);
+  assert.match(html,/api\/session\/model/);
+  assert.match(html,/glm-selected-model/);
+  assert.match(server,/app\.get\('\/api\/models'/);
+  assert.match(server,/app\.post\('\/api\/session\/model'/);
+  assert.match(server,/model:s\.model/);
+});
+
 test('main chat panel is a plain chat surface',()=>{
   assert.match(html,/chat-input-area/);
   assert.match(html,/placeholder="Message…"/);
