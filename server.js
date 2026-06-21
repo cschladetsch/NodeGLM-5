@@ -173,21 +173,28 @@ app.post('/api/repl/exec',async(req,res)=>{
   }catch(e){res.status(400).json({error:e.message});}
 });
 
-// Browser filesystem endpoints remain ROOT-relative. Agent tools are session-relative.
+app.get('/api/session',(req,res)=>{
+  const s=sess(req.query.sid||'default');
+  res.json({cwd:s.cwd,root:ROOT});
+});
+
+// Browser and agent filesystem operations share the session working directory.
 app.get('/api/fs/list',(req,res)=>{
   try{
-    const abs=safe(req.query.path||'');
+    const s=sess(req.query.sid||'default');
+    const abs=safe(req.query.path||'',s.cwd);
     const entries=fs.readdirSync(abs,{withFileTypes:true})
       .map(e=>({name:e.name,type:e.isDirectory()?'dir':'file',
         size:e.isFile()?fs.statSync(path.join(abs,e.name)).size:null}))
       .sort((a,b)=>a.type===b.type?a.name.localeCompare(b.name):a.type==='dir'?-1:1);
-    res.json({path:path.relative(ROOT,abs)||'.',abs,entries});
+    res.json({path:path.relative(s.cwd,abs)||'.',abs,cwd:s.cwd,entries});
   }catch(e){res.status(400).json({error:e.message});}
 });
 
 app.get('/api/fs/read',(req,res)=>{
   try{
-    const abs=safe(req.query.path);
+    const s=sess(req.query.sid||'default');
+    const abs=safe(req.query.path,s.cwd);
     if(fs.statSync(abs).size>2*1024*1024)return res.status(413).json({error:'File > 2 MB'});
     res.json({content:fs.readFileSync(abs,'utf8')});
   }catch(e){res.status(400).json({error:e.message});}
@@ -195,10 +202,11 @@ app.get('/api/fs/read',(req,res)=>{
 
 app.post('/api/fs/write',(req,res)=>{
   try{
-    const abs=safe(req.body.path);
+    const s=sess(req.body.sid||'default');
+    const abs=safe(req.body.path,s.cwd);
     if(typeof req.body.content!=='string')throw new Error('content must be a string');
     fs.writeFileSync(abs,req.body.content,'utf8');
-    res.json({ok:true,path:path.relative(ROOT,abs)});
+    res.json({ok:true,path:path.relative(s.cwd,abs)});
   }catch(e){res.status(400).json({error:e.message});}
 });
 

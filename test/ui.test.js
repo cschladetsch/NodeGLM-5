@@ -28,6 +28,13 @@ test('C and C++ extensions map to the Ace C++ mode',()=>{
 test('editor save posts current Ace content to the filesystem endpoint',()=>{
   assert.match(html,/fetch\(`\$\{API\}\/api\/fs\/write`/);
   assert.match(html,/content:aceRef\.current\.getValue\(\)/);
+  assert.match(html,/content:aceRef\.current\.getValue\(\),sid:SID/);
+});
+
+test('RHS Bash cwd is propagated to the file browser',()=>{
+  assert.match(html,/<ReplPanel cwd=\{cwd\} onCwdChange=\{setCwd\}/);
+  assert.match(html,/<FileBrowser cwd=\{cwd\}/);
+  assert.match(html,/api\/session\?sid=/);
 });
 
 test('main chat panel is a plain chat surface',()=>{
@@ -36,6 +43,13 @@ test('main chat panel is a plain chat surface',()=>{
   assert.match(html,/How can I help\?/);
   assert.doesNotMatch(html,/main-question-box/);
   assert.doesNotMatch(html,/effort-row/);
+});
+
+test('three-column workspace fills the React root without collapsing side panels',()=>{
+  assert.match(html,/#root\s*\{[^}]*height:\s*100%[^}]*display:\s*flex/s);
+  assert.match(html,/\.workspace\s*\{[^}]*min-width:\s*0[^}]*overflow:\s*hidden/s);
+  assert.match(html,/\.sidebar\s*\{[^}]*flex-shrink:\s*0/s);
+  assert.match(html,/\.right\s*\{[^}]*flex-shrink:\s*0[^}]*min-width:\s*320px/s);
 });
 
 test('./s is a thin launcher',()=>{

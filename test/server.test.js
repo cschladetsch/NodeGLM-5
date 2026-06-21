@@ -67,6 +67,20 @@ test('browser editor writes ROOT-relative files', async () => {
   assert.equal(fs.readFileSync(path.join(root,'editor.txt'),'utf8'),'edited\n');
 });
 
+test('browser filesystem follows the Bash session cwd', async () => {
+  fs.mkdirSync(path.join(root,'browser-project'));
+  await invoke('post','/api/tool/bash',{sid:'browser',cmd:'cd browser-project'});
+
+  const write=await invoke('post','/api/fs/write',
+    {sid:'browser',path:'session.txt',content:'session cwd\n'});
+  assert.equal(write.body.ok,true);
+  assert.equal(fs.readFileSync(path.join(root,'browser-project','session.txt'),'utf8'),'session cwd\n');
+
+  const list=await invoke('get','/api/fs/list',{}, {sid:'browser',path:''});
+  assert.equal(list.body.cwd,path.join(root,'browser-project'));
+  assert.ok(list.body.entries.some(entry=>entry.name==='session.txt'));
+});
+
 test('write diff previews existing and new files without changing them', async () => {
   fs.writeFileSync(path.join(root,'existing.txt'),'old\n');
   const existing=(await invoke('post','/api/tool/write_file/diff',
