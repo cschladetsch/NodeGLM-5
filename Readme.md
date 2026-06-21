@@ -54,8 +54,9 @@ Open `http://localhost:3001/` in a browser. Opening `index.html` directly via
 
 ## Features
 
-- **Coding agent** — streamed chat with sequential shell, read, and write tools
-- **Write approval** — previews a unified diff before any agent file write
+- **Coding agent** — streamed chat with a bounded shell, read, and write tool loop
+- **Tool approval** — approves shell commands and previews diffs before writes
+- **Cancellation** — stops an active model generation from the chat input
 - **Ace file editor** — Monokai theme, Vim bindings, syntax modes, and direct save
 - **File browser** sidebar — click to edit, or inject up to 8 KB into chat context
 - **Shell REPL** — one-shot exec with cwd tracking, command history (↑/↓)
@@ -69,12 +70,19 @@ Open `http://localhost:3001/` in a browser. Opening `index.html` directly via
 | `GLM_MODEL`    | `glm4:9b`               | Model identifier sent to the endpoint |
 | `SAFE_ROOT`    | `$HOME`                | Filesystem sandbox root              |
 | `PORT`         | `3001`                 | Express port                         |
+| `HOST`         | `127.0.0.1`            | HTTP bind address                    |
+| `GLM_ALLOWED_ORIGINS` | local app URLs | Comma-separated browser origins      |
+| `GLM_TIMEOUT_MS` | `120000`              | Model request timeout in milliseconds |
+| `GLM_MAX_TOKENS` | `4096`                | Maximum generated tokens per response |
+| `GLM_HISTORY_MESSAGES` | `40`            | Recent messages sent to the model     |
 
 ## Security note
 
 File tools enforce `SAFE_ROOT`. Shell commands run as the current user and are
 not OS-sandboxed, so a shell command can still access paths outside `SAFE_ROOT`.
-Do not expose this server to untrusted users or networks.
+The server binds only to localhost by default. Do not change `HOST` to a network
+interface unless you also provide authentication and restrict
+`GLM_ALLOWED_ORIGINS`; shell commands are not OS-sandboxed.
 
 ## Tests
 

@@ -45,6 +45,29 @@ test('main chat panel is a plain chat surface',()=>{
   assert.doesNotMatch(html,/effort-row/);
 });
 
+test('chat executes bounded tools and requires write approval',()=>{
+  assert.match(html,/step>=8/);
+  assert.match(html,/parseToolCall\(assistant\.content\)/);
+  assert.match(html,/api\/tool\/bash/);
+  assert.match(html,/api\/tool\/read_file/);
+  assert.match(html,/api\/tool\/write_file\/diff/);
+  assert.match(html,/Approve write/);
+  assert.match(html,/Approve command/);
+  assert.match(html,/resolveAction\(false\)/);
+  assert.match(html,/resultMessage/);
+});
+
+test('chat supports cancellation and health checks inference readiness',()=>{
+  assert.match(html,/new AbortController\(\)/);
+  assert.match(html,/abortRef\.current\?\.abort\(\)/);
+  assert.match(html,/Generation stopped/);
+  assert.match(server,/new URL\('\/v1\/models',OLLAMA\)/);
+  assert.match(server,/res\.on\('close'/);
+  assert.match(server,/GLM_TIMEOUT_MS/);
+  assert.match(server,/GLM_MAX_TOKENS/);
+  assert.match(server,/GLM_HISTORY_MESSAGES/);
+});
+
 test('three-column workspace fills the React root without collapsing side panels',()=>{
   assert.match(html,/#root\s*\{[^}]*height:\s*100%[^}]*display:\s*flex/s);
   assert.match(html,/\.workspace\s*\{[^}]*min-width:\s*0[^}]*overflow:\s*hidden/s);
@@ -64,6 +87,8 @@ test('index.html provides the Vim-enabled, syntax-colored Ace editor',()=>{
   assert.match(html,/editor\.session\.setMode\(`ace\/mode\/\$\{aceMode\(filePath\)\}`\)/);
   assert.match(html,/editor\.commands\.addCommand\(\{name:'saveFile'/);
   assert.match(html,/win:'Ctrl-S',mac:'Command-S'/);
+  assert.match(html,/onOpenFile=\{setViewFile\}/);
+  assert.match(html,/<FileViewerPanel filePath=\{viewFile\}/);
 });
 
 test('index.html exposes the right-side Bash and KAI buttons',()=>{
@@ -98,6 +123,11 @@ test('server.js integrates the filesystem and chat endpoints',()=>{
   assert.match(server,/app\.get\('\/api\/modelstore'/);
   assert.match(server,/app\.post\('\/api\/fs\/write'/);
   assert.match(server,/app\.get\('\/api\/health'/);
+  assert.match(server,/HOST\s*=process\.env\.HOST\s*\|\|\s*'127\.0\.0\.1'/);
+  assert.match(server,/GLM_ALLOWED_ORIGINS/);
+  assert.match(server,/new Map\(\)/);
+  assert.match(server,/sessions\.size>=1000/);
+  assert.match(server,/req\.headers\.origin&&!allowedOrigins\.has/);
 });
 
 test('server.js exposes the current REPL and filesystem endpoints',()=>{

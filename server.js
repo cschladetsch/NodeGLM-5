@@ -2,26 +2,54 @@ const express=require('express'),cors=require('cors'),fs=require('fs'),path=requ
 const {exec,spawn}=require('child_process');
 const Diff=require('diff');
 
-const app=express();
-app.use(cors());
-app.use(express.json({limit:'16mb'}));
-
-app.get(['/', '/index.html'],(_req,res)=>res.sendFile(path.join(__dirname,'index.html')));
-
 const OLLAMA=process.env.GLM_BASE_URL||'http://localhost:11434';
 const ROOT  =fs.realpathSync(path.resolve(process.env.SAFE_ROOT||process.env.HOME||'/tmp'));
 const PORT  =process.env.PORT        ||3001;
+const HOST  =process.env.HOST        ||'127.0.0.1';
 const MODEL =process.env.GLM_MODEL   ||'glm4:9b';
+const GLM_TIMEOUT_MS=Math.max(1000,Number(process.env.GLM_TIMEOUT_MS)||120000);
+const GLM_MAX_TOKENS=Math.max(256,Number(process.env.GLM_MAX_TOKENS)||4096);
+const GLM_HISTORY_MESSAGES=Math.max(4,Number(process.env.GLM_HISTORY_MESSAGES)||40);
 const MS_DIR=process.env.MS_DIR      ||path.join(os.homedir(),'local/repos/CppLmmModelStore');
 const KAI_DIR=process.env.KAI_DIR    ||path.join(__dirname,'Ext/CppKAI');
 const ENET_DIR=process.env.ENET_DIR  ||path.join(__dirname,'Ext/ENet');
 const KAI_CONSOLE=process.env.KAI_CONSOLE||path.join(KAI_DIR,'Bin/Console');
 
+const app=express();
+const allowedOrigins=new Set((process.env.GLM_ALLOWED_ORIGINS||
+  `http://localhost:${PORT},http://127.0.0.1:${PORT},null`).split(',').map(value=>value.trim()));
+app.use(cors({origin(origin,callback){
+  if(!origin||allowedOrigins.has(origin))return callback(null,true);
+  callback(new Error('Origin not allowed'));
+}}));
+app.use(express.json({limit:'16mb'}));
+const validSessionId=sid=>/^[A-Za-z0-9._-]{1,128}$/.test(String(sid));
+app.use('/api',(req,res,next)=>{
+  const sid=req.body?.sid??req.query?.sid;
+  if(sid!==undefined&&!validSessionId(sid))
+    return res.status(400).json({error:'invalid session id'});
+  next();
+});
+
+app.get(['/', '/index.html'],(_req,res)=>res.sendFile(path.join(__dirname,'index.html')));
+
 // Sessions: cwd tracked per SID
-const sessions={};
+const sessions=new Map();
+const SESSION_TTL=24*60*60*1000;
 function sess(sid){
-  if(!sessions[sid])sessions[sid]={cwd:ROOT};
-  return sessions[sid];
+  const now=Date.now();
+  if(sessions.size>=1000&&!sessions.has(sid)){
+    for(const [key,value] of sessions)if(now-value.lastUsed>SESSION_TTL)sessions.delete(key);
+    if(sessions.size>=1000){
+      let oldestKey,oldestTime=Infinity;
+      for(const [key,value] of sessions)if(value.lastUsed<oldestTime){oldestKey=key;oldestTime=value.lastUsed;}
+      if(oldestKey!==undefined)sessions.delete(oldestKey);
+    }
+  }
+  if(!sessions.has(sid))sessions.set(sid,{cwd:ROOT,lastUsed:now});
+  const session=sessions.get(sid);
+  session.lastUsed=now;
+  return session;
 }
 
 function safe(p, baseCwd){
@@ -46,8 +74,16 @@ function safe(p, baseCwd){
 }
 
 function run(cmd,cwd,timeout=20000){
-  return new Promise(res=>exec(cmd,{cwd,timeout,maxBuffer:2*1024*1024,shell:'/bin/bash'},
-    (e,o,r)=>res({stdout:o||'',stderr:r||'',exitCode:e?(e.code??1):0})));
+  const marker=`__NODEGLM_CWD_${crypto.randomBytes(12).toString('hex')}__`;
+  const wrapped=`${cmd}\n_nodeglm_status=$?\nprintf '\\n${marker}%s\\n' "$PWD"\nexit "$_nodeglm_status"`;
+  return new Promise(resolve=>exec(wrapped,{cwd,timeout,maxBuffer:2*1024*1024,shell:'/bin/bash'},
+    (error,stdout,stderr)=>{
+      const output=stdout||'';
+      const index=output.lastIndexOf(`\n${marker}`);
+      const finalCwd=index>=0?output.slice(index+marker.length+1).trim():cwd;
+      resolve({stdout:index>=0?output.slice(0,index):output,stderr:stderr||'',
+        exitCode:error?(error.code??1):0,cwd:finalCwd});
+    }));
 }
 
 // ModelStore
@@ -68,6 +104,23 @@ app.get('/api/modelstore',(_req,res)=>{
 const SYSTEM=`You are GLM-Code, a helpful, precise, and expert conversational software engineering assistant.
 You answer questions, explain code, and provide clear guidance on software development.
 When writing code, explain your design and provide complete, functional code blocks using standard markdown code fences (e.g. \`\`\`javascript).
+
+You can use tools when work in the current project is required. Emit exactly one tool request as the entire response:
+TOOL:bash
+CMD:<shell command>
+END_TOOL
+
+TOOL:read_file
+PATH:<path relative to cwd>
+END_TOOL
+
+TOOL:write_file
+PATH:<path relative to cwd>
+CONTENT:
+<complete new file content>
+END_TOOL
+
+After each request, the user will provide a TOOL_RESULT. Continue until the task is complete, then answer normally. Never claim a tool ran unless you received its TOOL_RESULT. Writes require user approval.
 `;
 
 app.post('/api/chat',(req,res)=>{
@@ -78,13 +131,14 @@ app.post('/api/chat',(req,res)=>{
   const last=messages[messages.length-1];
   if(!last||typeof last.content!=='string')
     return res.status(400).json({error:'last message must have string content'});
-  const augmented=[...messages.slice(0,-1),
+  const recent=messages.slice(-GLM_HISTORY_MESSAGES);
+  const augmented=[...recent.slice(0,-1),
     {...last,content:last.content+`\n\n[cwd: ${s.cwd}]`}];
   const payload=JSON.stringify({
     model:MODEL,
     messages:[{role:'system',content:SYSTEM},...augmented],
     temperature:0.1,
-    max_tokens:1024,
+    max_tokens:GLM_MAX_TOKENS,
     stream:true,
   });
   const url=new URL('/v1/chat/completions',OLLAMA);
@@ -92,10 +146,27 @@ app.post('/api/chat',(req,res)=>{
   res.setHeader('Cache-Control','no-cache');
   res.setHeader('Connection','keep-alive');
   const transport=url.protocol==='https:'?https:http;
+  let ended=false;
+  const fail=message=>{
+    if(ended||res.writableEnded)return;
+    ended=true;
+    res.write(`data: ${JSON.stringify({error:message})}\n\n`);res.end();
+  };
   const up=transport.request({hostname:url.hostname,port:url.port||(url.protocol==='https:'?443:80),path:url.pathname,method:'POST',
     headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)}},
-    r=>{r.on('data',c=>res.write(c));r.on('end',()=>res.end());});
-  up.on('error',e=>{res.write(`data: ${JSON.stringify({error:e.message})}\n\n`);res.end();});
+    r=>{
+      if((r.statusCode||500)>=400){
+        let body='';
+        r.on('data',chunk=>{if(body.length<8192)body+=chunk;});
+        r.on('end',()=>fail(`Model endpoint HTTP ${r.statusCode}: ${body.slice(0,500)}`));
+        return;
+      }
+      r.on('data',chunk=>{if(!res.writableEnded)res.write(chunk);});
+      r.on('end',()=>{if(!res.writableEnded){ended=true;res.end();}});
+    });
+  up.setTimeout(GLM_TIMEOUT_MS,()=>up.destroy(new Error(`Model request timed out after ${GLM_TIMEOUT_MS} ms`)));
+  up.on('error',error=>fail(error.message));
+  res.on('close',()=>{if(!res.writableEnded&&!ended)up.destroy();});
   up.write(payload);up.end();
 });
 
@@ -105,26 +176,11 @@ app.post('/api/tool/bash',async(req,res)=>{
   if(!cmd)return res.status(400).json({error:'cmd required'});
   const s=sess(sid||'default');
 
-  // Strip leading/trailing whitespace and handle multiline (take first non-empty line as cmd)
-  const cleanCmd=cmd.trim().split('\n').map(l=>l.trim()).filter(Boolean).join(' && ');
-
-  // Handle cd specially
-  const cdMatch=cleanCmd.match(/^cd\s+(.+)$/);
-  if(cdMatch){
-    const tgt=cdMatch[1].trim().replace(/^~/,os.homedir());
-    try{
-      const resolved=safe(tgt,s.cwd);
-      if(!fs.statSync(resolved).isDirectory())
-        return res.json({stdout:'',stderr:`cd: not a directory: ${tgt}`,exitCode:1,cwd:s.cwd});
-      s.cwd=resolved;
-      return res.json({stdout:`cwd is now ${resolved}`,stderr:'',exitCode:0,cwd:s.cwd});
-    }catch(e){
-      const message=/Outside sandbox/.test(e.message)?'outside sandbox':`no such directory: ${tgt}`;
-      return res.json({stdout:'',stderr:`cd: ${message}`,exitCode:1,cwd:s.cwd});
-    }
-  }
-
-  const r=await run(cleanCmd,s.cwd);
+  const r=await run(cmd.trim(),s.cwd);
+  try{
+    const finalCwd=safe(r.cwd,s.cwd);
+    if(fs.statSync(finalCwd).isDirectory())s.cwd=finalCwd;
+  }catch{}
   res.json({...r,cwd:s.cwd});
 });
 
@@ -210,7 +266,22 @@ app.post('/api/fs/write',(req,res)=>{
   }catch(e){res.status(400).json({error:e.message});}
 });
 
-app.get('/api/health',(_,res)=>res.json({ok:true,model:MODEL,ollama:OLLAMA,root:ROOT}));
+app.get('/api/health',(_req,res)=>{
+  const url=new URL('/v1/models',OLLAMA);
+  const transport=url.protocol==='https:'?https:http;
+  let settled=false;
+  const finish=(ok,error)=>{
+    if(settled)return;settled=true;
+    res.status(ok?200:503).json({ok,inference:ok,model:MODEL,ollama:OLLAMA,root:ROOT,...(error?{error}:{})});
+  };
+  const check=transport.get({hostname:url.hostname,port:url.port||(url.protocol==='https:'?443:80),path:url.pathname},upstream=>{
+    upstream.resume();
+    upstream.on('end',()=>finish((upstream.statusCode||500)<400,
+      (upstream.statusCode||500)>=400?`Model endpoint HTTP ${upstream.statusCode}`:null));
+  });
+  check.setTimeout(2000,()=>check.destroy(new Error('Model health check timed out')));
+  check.on('error',error=>finish(false,error.message));
+});
 
 const server=http.createServer(app);
 function wsFrame(text){
@@ -268,6 +339,7 @@ function ensureKaiENet(){
 }
 server.on('upgrade',(req,socket,head)=>{
   if(req.url!=='/api/kai'){socket.destroy();return;}
+  if(req.headers.origin&&!allowedOrigins.has(req.headers.origin)){socket.destroy();return;}
   const key=req.headers['sec-websocket-key'];
   if(!key){socket.destroy();return;}
   const accept=crypto.createHash('sha1')
@@ -324,6 +396,10 @@ server.on('upgrade',(req,socket,head)=>{
   });
   socket.on('close',()=>{if(proc)proc.kill('SIGTERM');});
 });
+app.use((error,_req,res,_next)=>{
+  if(error.message==='Origin not allowed')return res.status(403).json({error:error.message});
+  res.status(500).json({error:'internal server error'});
+});
 if(require.main===module){
   server.on('error',error=>{
     if(error.code==='EADDRINUSE'){
@@ -332,7 +408,7 @@ if(require.main===module){
     }
     throw error;
   });
-  server.listen(PORT,()=>console.log(`  glm-code http://localhost:${PORT}  model=${MODEL}  root=${ROOT}`));
+  server.listen(PORT,HOST,()=>console.log(`  glm-code http://${HOST}:${PORT}  model=${MODEL}  root=${ROOT}`));
 }
 
-module.exports={app,server,safe};
+module.exports={app,server,safe,validSessionId};

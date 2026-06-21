@@ -6,7 +6,7 @@ const path = require('node:path');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'glm-code-test-'));
 process.env.SAFE_ROOT = root;
-const {app, safe} = require('../server');
+const {app, safe, validSessionId} = require('../server');
 
 test.after(() => {
   fs.rmSync(root, {recursive:true, force:true});
@@ -57,6 +57,13 @@ test('chat rejects malformed messages before proxying', async () => {
   const response = await invoke('post','/api/chat',{messages:[]});
   assert.equal(response.statusCode, 400);
   assert.match(response.body.error, /non-empty/);
+});
+
+test('API rejects malformed session identifiers', async () => {
+  assert.equal(validSessionId('session-123.example'),true);
+  assert.equal(validSessionId('../escape'),false);
+  assert.equal(validSessionId('__proto__'),true);
+  assert.equal(validSessionId('x'.repeat(129)),false);
 });
 
 test('browser editor writes ROOT-relative files', async () => {
@@ -116,4 +123,19 @@ test('bash sessions are isolated and report command failures', async () => {
 
   const failed=(await invoke('post','/api/tool/bash',{sid:'session-b',cmd:'exit 7'})).body;
   assert.equal(failed.exitCode,7);
+});
+
+test('compound and multiline Bash commands persist their final cwd', async () => {
+  fs.mkdirSync(path.join(root,'compound'));
+  const compound=(await invoke('post','/api/tool/bash',
+    {sid:'compound-cwd',cmd:'cd compound && pwd'})).body;
+  assert.equal(compound.exitCode,0);
+  assert.equal(compound.cwd,path.join(root,'compound'));
+
+  const parent=(await invoke('post','/api/tool/bash',
+    {sid:'compound-cwd',cmd:'printf first\\n\ncd ..\nprintf second\\n'})).body;
+  assert.equal(parent.exitCode,0);
+  assert.equal(parent.cwd,root);
+  assert.match(parent.stdout,/first/);
+  assert.match(parent.stdout,/second/);
 });

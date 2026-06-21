@@ -252,6 +252,37 @@
     padding-left: 8px;
     margin-bottom: 8px;
   }
+  .tool-card {
+    min-width: 320px;
+    max-width: min(720px, 70vw);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  .tool-card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    color: var(--accent);
+    font: 11px var(--mono);
+    border-bottom: 1px solid var(--border);
+  }
+  .tool-card pre {
+    max-height: 320px;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    white-space: pre-wrap;
+  }
+  .tool-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 8px 10px;
+    border-top: 1px solid var(--border);
+  }
   .msg-meta {
     font-size: 10px;
     color: var(--muted);
@@ -1078,7 +1109,7 @@ function aceMode(filePath) {
 }
 
 // ── File editor panel ───────────────────────────────────────────────────────
-function FileViewerPanel({ filePath }) {
+function FileViewerPanel({ filePath, onClose }) {
   const [content, setContent] = useState(null);
   const [err, setErr] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -1155,6 +1186,8 @@ function FileViewerPanel({ filePath }) {
         <span style={{fontSize:10}}>Vim · {aceMode(filePath)}</span>
         <button className="btn btn-primary" style={{fontSize:11,padding:'4px 10px'}}
           onClick={save} disabled={saving||!dirty}>{saving?'Saving…':'Save'}</button>
+        <button className="btn btn-ghost" style={{fontSize:11,padding:'4px 10px'}}
+          onClick={onClose}>Close</button>
       </div>
       {loading && <div className="file-viewer-empty"><span>Loading…</span></div>}
       {err && <div style={{padding:'6px 16px',color:'var(--warn)',background:'var(--surface)',fontSize:11}}>{err}</div>}
@@ -1164,15 +1197,17 @@ function FileViewerPanel({ filePath }) {
 }
 
 // ── Chat panel ─────────────────────────────────────────────────────────────
-function ChatPanel({ injectedFile, onClearInject }) {
+function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
   const [messages, setMessages] = useState([
     { role:'assistant', content:'How can I help?' }
   ]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState([]);
+  const [pendingAction, setPendingAction] = useState(null);
   const messagesEndRef = useRef(null);
   const taRef = useRef(null);
+  const abortRef = useRef(null);
 
   useEffect(() => {
     if (injectedFile) {
@@ -1193,9 +1228,140 @@ function ChatPanel({ injectedFile, onClearInject }) {
     }
   }, [input]);
 
+  const updateMessage = (id, patch) => setMessages(current => current.map(
+    message => message.id === id ? {...message,...patch} : message
+  ));
+
+  const toolResult = (tool, result) =>
+    `TOOL_RESULT:${tool}\n${typeof result === 'string' ? result : JSON.stringify(result, null, 2)}\nEND_TOOL_RESULT`;
+
+  const streamAssistant = async (history) => {
+    const id = crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`;
+    setMessages(current => [...current, {id,role:'assistant',content:'',thinking:''}]);
+    const controller=new AbortController();
+    abortRef.current=controller;
+    const res = await fetch(`${API}/api/chat`, {
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({messages:history,sid:SID}),
+      signal:controller.signal,
+    });
+    if(!res.ok)throw new Error((await res.json()).error||`HTTP ${res.status}`);
+
+    const reader=res.body.getReader();
+    const dec=new TextDecoder();
+    let buf='',content='',thinking='';
+    while(true){
+      const {done,value}=await reader.read();
+      if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      const lines=buf.split('\n');buf=lines.pop();
+      for(const line of lines){
+        if(!line.startsWith('data: '))continue;
+        const raw=line.slice(6).trim();
+        if(!raw||raw==='[DONE]')continue;
+        const obj=JSON.parse(raw);
+        if(obj.error)throw new Error(obj.error);
+        const delta=obj.choices?.[0]?.delta;
+        if(!delta)continue;
+        content+=delta.content||'';
+        thinking+=delta.reasoning_content||'';
+        updateMessage(id,{content,thinking});
+      }
+    }
+    abortRef.current=null;
+    return {id,content};
+  };
+
+  const runAgent = async (history, step=0) => {
+    if(step>=8){
+      setMessages(current=>[...current,{role:'assistant',content:'Stopped after 8 tool steps. Refine the request to continue.'}]);
+      setStreaming(false);return;
+    }
+    try{
+      const assistant=await streamAssistant(history);
+      const call=parseToolCall(assistant.content);
+      if(!call){
+        setStreaming(false);return;
+      }
+      if(call.tool==='done'){
+        updateMessage(assistant.id,{content:call.summary||'Done.'});
+        setStreaming(false);return;
+      }
+      const nextHistory=[...history,{role:'assistant',content:assistant.content}];
+
+      if(call.tool==='write_file'){
+        if(!call.path)throw new Error('Model requested write_file without a path');
+        const response=await fetch(`${API}/api/tool/write_file/diff`,{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({...call,sid:SID}),
+        });
+        const proposal=await response.json();
+        if(!response.ok||proposal.error)throw new Error(proposal.error||`HTTP ${response.status}`);
+        updateMessage(assistant.id,{toolCall:call,proposal,status:'approval required'});
+        setPendingAction({call,history:nextHistory,step:step+1,messageId:assistant.id});
+        setStreaming(false);return;
+      }
+
+      if(call.tool==='bash'){
+        if(!call.cmd)throw new Error('Model requested bash without a command');
+        updateMessage(assistant.id,{toolCall:call,status:'approval required'});
+        setPendingAction({call,history:nextHistory,step:step+1,messageId:assistant.id});
+        setStreaming(false);return;
+      }
+
+      let result;
+      if(call.tool==='read_file'){
+        if(!call.path)throw new Error('Model requested read_file without a path');
+        const response=await fetch(`${API}/api/tool/read_file`,{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({path:call.path,sid:SID}),
+        });
+        result=await response.json();
+        if(!response.ok||result.error)throw new Error(result.error||`HTTP ${response.status}`);
+      }else{
+        throw new Error(`Unsupported tool: ${call.tool}`);
+      }
+      const shown=JSON.stringify(result,null,2).slice(0,12000);
+      const resultMessage=toolResult(call.tool,shown);
+      updateMessage(assistant.id,{toolCall:call,toolResult:shown,resultMessage,status:'completed'});
+      await runAgent([...nextHistory,{role:'user',content:resultMessage}],step+1);
+    }catch(error){
+      const content=error.name==='AbortError'?'Generation stopped.':`Error: ${error.message}`;
+      setMessages(current=>[...current,{role:'assistant',content}]);
+      abortRef.current=null;
+      setStreaming(false);
+    }
+  };
+
+  const resolveAction = async (approved) => {
+    const pending=pendingAction;
+    if(!pending)return;
+    setPendingAction(null);setStreaming(true);
+    let result=`${pending.call.tool} rejected by user.`;
+    try{
+      if(approved){
+        const endpoint=pending.call.tool==='bash'?'/api/tool/bash':'/api/tool/write_file/confirm';
+        const response=await fetch(`${API}${endpoint}`,{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({...pending.call,sid:SID}),
+        });
+        const body=await response.json();
+        if(!response.ok||body.error)throw new Error(body.error||`HTTP ${response.status}`);
+        if(body.cwd)onCwdChange?.(body.cwd);
+        result=JSON.stringify(body,null,2);
+      }
+      const resultMessage=toolResult(pending.call.tool,result);
+      updateMessage(pending.messageId,{status:approved?'approved':'rejected',toolResult:result,resultMessage});
+      await runAgent([...pending.history,{role:'user',content:resultMessage}],pending.step);
+    }catch(error){
+      updateMessage(pending.messageId,{status:'failed',toolResult:error.message});
+      setStreaming(false);
+    }
+  };
+
   const send = async () => {
     if (!input.trim() && attachedFiles.length === 0) return;
-    if (streaming) return;
+    if (streaming || pendingAction) return;
 
     // build context from attached files
     let context = '';
@@ -1225,62 +1391,15 @@ function ChatPanel({ injectedFile, onClearInject }) {
 
     // build API messages using history fullContent for correct context
     const apiMessages = [
-      ...messages.filter(m => m.role !== 'system').map(m => ({
-        role: m.role,
-        content: m.role === 'user' ? (m.fullContent || m.content) : m.content
-      })),
+      ...messages.filter(m=>m.role!=='system').flatMap(m=>[
+        {role:m.role,content:m.role==='user'?(m.fullContent||m.content):m.content},
+        ...(m.resultMessage?[{role:'user',content:m.resultMessage}]:[]),
+      ]),
       { role: 'user', content: userContent }
     ];
 
     setStreaming(true);
-    const assistantMsg = { role: 'assistant', content: '', thinking: '' };
-    setMessages(m => [...m, assistantMsg]);
-
-    try {
-      const res = await fetch(`${API}/api/chat`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: apiMessages, sid: SID }),
-      });
-      if (!res.ok) {
-        throw new Error((await res.json()).error || `HTTP ${res.status}`);
-      }
-
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '', content = '', thinking = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        const lines = buf.split('\n');
-        buf = lines.pop();
-        for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const raw = line.slice(6).trim();
-          if (!raw || raw === '[DONE]') continue;
-          const obj = JSON.parse(raw);
-          if (obj.error) throw new Error(obj.error);
-          const delta = obj.choices?.[0]?.delta;
-          if (!delta) continue;
-          content += delta.content || '';
-          thinking += delta.reasoning_content || '';
-          setMessages(m => {
-            const copy = [...m];
-            copy[copy.length - 1] = { ...copy[copy.length - 1], content, thinking };
-            return copy;
-          });
-        }
-      }
-    } catch (e) {
-      setMessages(m => {
-        const copy = [...m];
-        copy[copy.length - 1] = { ...copy[copy.length - 1], content: `Error: ${e.message}` };
-        return copy;
-      });
-    } finally {
-      setStreaming(false);
-    }
+    await runAgent(apiMessages);
   };
 
   const onKeyDown = (e) => {
@@ -1294,7 +1413,7 @@ function ChatPanel({ injectedFile, onClearInject }) {
     <div className="main">
       <div className="chat-messages">
         {messages.map((msg, i) => (
-          <div key={i} className={`msg ${msg.role}`}>
+          <div key={msg.id||i} className={`msg ${msg.role}`}>
             <div className="msg-avatar">{msg.role === 'user' ? 'U' : 'G'}</div>
             <div>
               {msg.files && msg.files.length > 0 && (
@@ -1316,7 +1435,25 @@ function ChatPanel({ injectedFile, onClearInject }) {
                     }
                   </div>
                 )}
-                {renderMarkdown(msg.content)}
+                {msg.toolCall ? (
+                  <div className="tool-card">
+                    <div className="tool-card-head">
+                      <strong>{msg.toolCall.tool}</strong>
+                      <span>{msg.toolCall.cmd||msg.toolCall.path}</span>
+                      <span style={{marginLeft:'auto'}}>{msg.status}</span>
+                    </div>
+                    {msg.proposal && <pre>{msg.proposal.patch}</pre>}
+                    {msg.toolResult && <pre>{msg.toolResult}</pre>}
+                    {pendingAction?.messageId===msg.id && (
+                      <div className="tool-actions">
+                        <button className="btn btn-ghost" onClick={()=>resolveAction(false)}>Reject</button>
+                        <button className="btn btn-primary" onClick={()=>resolveAction(true)}>
+                          {msg.toolCall.tool==='bash'?'Approve command':'Approve write'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                ) : renderMarkdown(msg.content)}
                 {msg.role === 'assistant' && streaming && i === messages.length - 1 && !msg.content && (
                   <span style={{ color: 'var(--muted)' }}>▌</span>
                 )}
@@ -1345,11 +1482,13 @@ function ChatPanel({ injectedFile, onClearInject }) {
             onChange={e => setInput(e.target.value)}
             onKeyDown={onKeyDown}
             placeholder="Message…"
-            disabled={streaming}
+            disabled={streaming||Boolean(pendingAction)}
             rows={1}
           />
-          <button className="btn btn-primary" onClick={send} disabled={streaming || (!input.trim() && attachedFiles.length === 0)}>
-            {streaming ? '…' : '↑'}
+          <button className="btn btn-primary"
+            onClick={streaming?()=>abortRef.current?.abort():send}
+            disabled={Boolean(pendingAction)||(!streaming&&!input.trim()&&attachedFiles.length===0)}>
+            {streaming ? 'Stop' : '↑'}
           </button>
         </div>
       </div>
@@ -1366,11 +1505,12 @@ function App() {
   const [resizing, setResizing] = useState(false);
   const [rhoMirror, setRhoMirror] = useState('');
   const [cwd, setCwd]             = useState('');
+  const [viewFile, setViewFile]   = useState(null);
 
   useEffect(() => {
     const check = () => {
       fetch(`${API}/api/health`)
-        .then(r => r.json())
+        .then(r => {if(!r.ok)throw new Error(`HTTP ${r.status}`);return r.json();})
         .then(() => setStatus('online'))
         .catch(() => setStatus('error'));
     };
@@ -1426,10 +1566,11 @@ function App() {
       </div>
 
       <div className="workspace">
-        <FileBrowser cwd={cwd} onInject={injectToChat} onOpenFile={()=>{}}/>
-        <div className="main">
-          <ChatPanel injectedFile={injectedFile} onClearInject={()=>setInj(null)}/>
+        <FileBrowser cwd={cwd} onInject={injectToChat} onOpenFile={setViewFile}/>
+        <div className="main" style={{display:viewFile?'none':'flex'}}>
+          <ChatPanel injectedFile={injectedFile} onClearInject={()=>setInj(null)} onCwdChange={setCwd}/>
         </div>
+        {viewFile && <FileViewerPanel filePath={viewFile} onClose={()=>setViewFile(null)}/>}
         <div className={`right-resizer${resizing?' dragging':''}`} onPointerDown={resizeRight} title="Drag to resize side panel"/>
         <div className="right" style={{width:rightWidth}}>
           <div className="right-tabs">

@@ -61,7 +61,21 @@ test('Edge edits and saves a C++ file through Ace', {skip}, async()=>{
       url:`http://127.0.0.1:${server.address().port}/`
     });
 
-    await execute("document.querySelectorAll('.tab')[2].click()");
+    for(let i=0;i<100;i++){
+      const layout=await execute(`
+        const sidebar=document.querySelector('.sidebar')?.getBoundingClientRect();
+        const main=document.querySelector('.workspace > .main')?.getBoundingClientRect();
+        const right=document.querySelector('.right')?.getBoundingClientRect();
+        return sidebar&&main&&right?{sidebar:sidebar.width,main:main.width,right:right.width}:null;
+      `);
+      if(layout){
+        assert.ok(layout.sidebar>=200,`sidebar width ${layout.sidebar}`);
+        assert.ok(layout.main>0,`main width ${layout.main}`);
+        assert.ok(layout.right>=320,`right width ${layout.right}`);
+        break;
+      }
+      await sleep(100);
+    }
     for(let i=0;i<100;i++){
       const ready=await execute(`
         const entry=[...document.querySelectorAll('.sidebar-entry')]
