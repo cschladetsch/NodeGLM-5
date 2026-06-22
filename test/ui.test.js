@@ -71,6 +71,47 @@ test('main chat panel is a plain chat surface',()=>{
   assert.doesNotMatch(html,/effort-row/);
 });
 
+test('chat persists bounded conversation memory in local storage',()=>{
+  assert.match(html,/CHAT_MEMORY_KEY = 'nodeglm-chat-memory-v1'/);
+  assert.match(html,/CHAT_MEMORY_LIMIT = 100/);
+  assert.match(html,/useState\(loadChatMemory\)/);
+  assert.match(html,/localStorage\.setItem\(CHAT_MEMORY_KEY,JSON\.stringify\(stable\)\)/);
+  assert.match(html,/\.slice\(-CHAT_MEMORY_LIMIT\)/);
+  assert.match(html,/if\(!streaming&&!pendingAction\)saveChatMemory\(messages\)/);
+});
+
+test('chat memory validates stored messages and excludes transient request state',()=>{
+  assert.match(html,/\['user','assistant'\]\.includes\(message\.role\)/);
+  assert.match(html,/typeof message\.content==='string'/);
+  assert.match(html,/messages\.filter\(message => !message\.requestPending && message\.content\)/);
+  assert.match(html,/\{requestPending,startedAt,\.\.\.message\}/);
+  assert.match(html,/catch \{[\s\S]*?return INITIAL_CHAT_MESSAGES/);
+});
+
+test('chat errors replace the active placeholder instead of adding a blank message',()=>{
+  assert.match(html,/error\.requestMessageId=id/);
+  assert.match(html,/if\(error\.requestMessageId\)updateMessage\(error\.requestMessageId,\{content\}\)/);
+});
+
+test('CUDA allocation failures provide a usable low-memory recovery path',()=>{
+  assert.match(html,/unable to allocate CUDA\|failed to load model/);
+  assert.match(html,/Choose a smaller model from the header/);
+  assert.match(html,/your conversation is saved/);
+  assert.match(launcher,/GLM_MODEL="\$\{GLM_MODEL:-qwen2\.5-coder:7b\}"/);
+  assert.match(launcher,/OLLAMA_CONTEXT_LENGTH="\$\{OLLAMA_CONTEXT_LENGTH:-4096\}"/);
+  assert.match(launcher,/OLLAMA_KV_CACHE_TYPE="\$\{OLLAMA_KV_CACHE_TYPE:-q8_0\}"/);
+  assert.match(launcher,/OLLAMA_GPU_OVERHEAD="\$\{OLLAMA_GPU_OVERHEAD:-1073741824\}"/);
+  assert.match(launcher,/OLLAMA_MAX_LOADED_MODELS="\$\{OLLAMA_MAX_LOADED_MODELS:-1\}"/);
+  assert.match(launcher,/OLLAMA_NUM_PARALLEL="\$\{OLLAMA_NUM_PARALLEL:-1\}"/);
+});
+
+test('chat exposes a guarded clear-memory control',()=>{
+  assert.match(html,/Clear saved conversation memory\?/);
+  assert.match(html,/localStorage\.removeItem\(CHAT_MEMORY_KEY\)/);
+  assert.match(html,/>Clear memory<\/button>/);
+  assert.match(html,/disabled=\{streaming\|\|Boolean\(pendingAction\)\}/);
+});
+
 test('chat executes bounded tools and requires write approval',()=>{
   assert.match(html,/step>=8/);
   assert.match(html,/parseToolCall\(assistant\.content\)/);
@@ -157,7 +198,7 @@ test('three-column workspace fills the React root without collapsing side panels
 });
 
 test('./s starts the server and schedules its self-hosted app window',()=>{
-  assert.match(launcher,/exec npm start/);
+  assert.match(launcher,/npm start &/);
   assert.match(launcher,/SAFE_ROOT="\$\{SAFE_ROOT:-\$SCRIPT_DIR\}"/);
   assert.match(launcher,/Scripts\/open-app-window\.sh/);
   assert.match(windowLauncher,/api\/health/);
@@ -262,5 +303,5 @@ test('./s is no longer the implementation for CppKAI or the editor',()=>{
   assert.match(submodules,/url = https:\/\/github\.com\/cschladetsch\/CppKAI/);
   assert.match(submodules,/path = Ext\/ENet/);
   assert.match(submodules,/url = https:\/\/github\.com\/lsalzman\/enet\.git/);
-  assert.match(launcher,/exec npm start/);
+  assert.match(launcher,/npm start &/);
 });

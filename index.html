@@ -373,6 +373,24 @@
     flex-direction: column;
     gap: 8px;
   }
+  .chat-memory-bar {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    min-height: 20px;
+    color: var(--muted);
+    font: 10px var(--mono);
+  }
+  .chat-memory-clear {
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    cursor: pointer;
+  }
+  .chat-memory-clear:hover:not(:disabled) { color: var(--warn); }
+  .chat-memory-clear:disabled { cursor: default; opacity: .45; }
   .chat-input-files {
     display: flex;
     flex-wrap: wrap;
@@ -694,6 +712,35 @@ ace.config.set('basePath','https://cdnjs.cloudflare.com/ajax/libs/ace/1.36.5/');
 const SID = sessionStorage.getItem('glm-code-sid') ||
   (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
 sessionStorage.setItem('glm-code-sid', SID);
+const CHAT_MEMORY_KEY = 'nodeglm-chat-memory-v1';
+const CHAT_MEMORY_LIMIT = 100;
+const INITIAL_CHAT_MESSAGES = [{role:'assistant',content:'How can I help?'}];
+
+function loadChatMemory() {
+  try {
+    const saved=JSON.parse(localStorage.getItem(CHAT_MEMORY_KEY));
+    if(!Array.isArray(saved))return INITIAL_CHAT_MESSAGES;
+    const valid=saved.filter(message =>
+      message && ['user','assistant'].includes(message.role) && typeof message.content==='string'
+    ).slice(-CHAT_MEMORY_LIMIT);
+    return valid.length ? valid : INITIAL_CHAT_MESSAGES;
+  } catch {
+    return INITIAL_CHAT_MESSAGES;
+  }
+}
+
+function saveChatMemory(messages) {
+  const stable=messages.filter(message => !message.requestPending && message.content).slice(-CHAT_MEMORY_LIMIT)
+    .map(({requestPending,startedAt,...message}) => message);
+  try { localStorage.setItem(CHAT_MEMORY_KEY,JSON.stringify(stable)); }
+  catch(error) { console.error('Failed to save chat memory:',error); }
+}
+
+function chatErrorMessage(error) {
+  if(/unable to allocate CUDA|failed to load model/i.test(error.message))
+    return 'The selected model does not fit in available GPU memory. Choose a smaller model from the header; your conversation is saved.';
+  return error.name==='AbortError'?'Generation stopped.':`Error: ${error.message}`;
+}
 
 function parseToolCall(text) {
   const match = text.trim().match(/^TOOL:(bash|read_file|write_file|done)\s*\n([\s\S]*?)\nEND_TOOL\s*$/);
@@ -1357,9 +1404,7 @@ function RequestProgress({ startedAt, delaySeconds }) {
 }
 
 function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
-  const [messages, setMessages] = useState([
-    { role:'assistant', content:'How can I help?' }
-  ]);
+  const [messages, setMessages] = useState(loadChatMemory);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState([]);
@@ -1378,6 +1423,10 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
       })
       .catch(error => console.error('Failed to load UI config:', error));
   }, []);
+
+  useEffect(() => {
+    if(!streaming&&!pendingAction)saveChatMemory(messages);
+  }, [messages,streaming,pendingAction]);
 
   useEffect(() => {
     if (injectedFile) {
@@ -1441,6 +1490,9 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
         }
       }
       return {id,content};
+    }catch(error){
+      error.requestMessageId=id;
+      throw error;
     }finally{
       updateMessage(id,{requestPending:false});
       if(abortRef.current===controller)abortRef.current=null;
@@ -1501,8 +1553,9 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
       updateMessage(assistant.id,{toolCall:call,toolResult:shown,resultMessage,status:'completed'});
       await runAgent([...nextHistory,{role:'user',content:resultMessage}],step+1);
     }catch(error){
-      const content=error.name==='AbortError'?'Generation stopped.':`Error: ${error.message}`;
-      setMessages(current=>[...current,{role:'assistant',content}]);
+      const content=chatErrorMessage(error);
+      if(error.requestMessageId)updateMessage(error.requestMessageId,{content});
+      else setMessages(current=>[...current,{role:'assistant',content}]);
       abortRef.current=null;
       setStreaming(false);
     }
@@ -1597,6 +1650,12 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
     }
   };
 
+  const clearMemory = () => {
+    if(!window.confirm('Clear saved conversation memory?'))return;
+    localStorage.removeItem(CHAT_MEMORY_KEY);
+    setMessages(INITIAL_CHAT_MESSAGES);
+  };
+
   return (
     <div className="main">
       <div className="chat-messages">
@@ -1656,6 +1715,11 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
       </div>
 
       <div className="chat-input-area">
+        <div className="chat-memory-bar">
+          <span>Memory: {messages.length} message{messages.length===1?'':'s'}</span>
+          <button className="chat-memory-clear" onClick={clearMemory}
+            disabled={streaming||Boolean(pendingAction)}>Clear memory</button>
+        </div>
         {attachedFiles.length > 0 && (
           <div className="chat-input-files">
             {attachedFiles.map(fp => (

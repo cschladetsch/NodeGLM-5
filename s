@@ -6,7 +6,7 @@ cd "$SCRIPT_DIR"
 
 GLM_BASE_URL="${GLM_BASE_URL:-http://localhost:11434/v1}"
 GLM_MODEL="${GLM_MODEL:-qwen2.5-coder:7b}"
-SAFE_ROOT="${SAFE_ROOT:-/home/christian/local/repos}"
+SAFE_ROOT="${SAFE_ROOT:-$SCRIPT_DIR}"
 APP_URL="${NODEGLM_URL:-http://${HOST:-127.0.0.1}:${PORT:-3001}/}"
 MODEL_CACHE_ROOT="${MODEL_CACHE_ROOT:-$HOME/.models}"
 OLLAMA_MODELS="${OLLAMA_MODELS:-$MODEL_CACHE_ROOT/ollama}"
@@ -24,7 +24,8 @@ export OLLAMA_NUM_PARALLEL OLLAMA_GPU_OVERHEAD
 
 ensure_ollama() {
   case "$GLM_BASE_URL" in
-    http://localhost:11434|http://localhost:11434/v1|    http://127.0.0.1:11434|http://127.0.0.1:11434/v1) ;;
+    http://localhost:11434|http://localhost:11434/v1|\
+    http://127.0.0.1:11434|http://127.0.0.1:11434/v1) ;;
     *) return ;;
   esac
   OLLAMA_BASE="${GLM_BASE_URL%/v1}"

@@ -38,7 +38,9 @@ traffic, and starts local subprocesses. `index.html` contains the client UI.
   and Tree tabs
 - Optional: Microsoft Edge and `msedgedriver` for the browser end-to-end test
 
-The default endpoint is Ollama at `http://localhost:11434`, using `glm4:9b`.
+The default endpoint is Ollama at `http://localhost:11434`, using the
+`qwen2.5-coder:7b` coding model. The launcher uses memory-conservative Ollama
+defaults so it can run on an 8 GB GPU with CPU offload when needed.
 
 ## Install
 
@@ -102,8 +104,8 @@ The UI has three persistent columns:
 - **File browser:** browses from the current session directory, hides dotfiles by
   default, opens files in the editor, and can inject up to 8 KB into chat.
 - **Chat and editor:** streams model responses, runs the bounded agent loop, and
-  edits files with Ace, Monokai, Vim bindings, syntax modes, and `Ctrl-S` or
-  `Command-S` save.
+  remembers up to 100 messages in browser-local storage, and edits files with
+  Ace, Monokai, Vim bindings, syntax modes, and `Ctrl-S` or `Command-S` save.
 - **Tools:** provides Bash plus a persistent CppKAI runtime with Pi, Rho,
   executor-attached Debug, and executor-attached Tree views.
 
@@ -111,9 +113,10 @@ Each browser session has its own current directory and selected model. A
 successful `cd` in Bash or through the Chat Box updates the shared directory
 used by Chat tools, Bash, and the file browser for that session. A `cd ...`
 entered directly in Chat is routed through the normal command-approval flow
-without asking the model to interpret it. Sessions are held in memory,
-expire after 24 hours when capacity cleanup runs, and are lost when the server
-restarts.
+without asking the model to interpret it. Conversation memory survives page and
+server restarts and can be cleared from the chat input. Server-side working
+directory and model sessions expire after 24 hours when capacity cleanup runs
+and are lost when the server restarts.
 
 ## Agent Tool Flow
 
@@ -189,7 +192,7 @@ before its spinner, progress bar, and elapsed timer appear.
 | Variable | Default | Purpose |
 |---|---|---|
 | `GLM_BASE_URL` | `http://localhost:11434` | OpenAI-compatible endpoint base URL |
-| `GLM_MODEL` | `glm4:9b` | Initial model for new sessions |
+| `GLM_MODEL` | `qwen2.5-coder:7b` | Initial model for new sessions |
 | `GLM_TIMEOUT_MS` | `120000` | Chat request timeout; minimum 1000 ms |
 | `GLM_MAX_TOKENS` | `4096` | Completion token limit; minimum 256 |
 | `GLM_HISTORY_MESSAGES` | `40` | Recent chat messages forwarded; minimum 4 |
@@ -199,6 +202,11 @@ before its spinner, progress bar, and elapsed timer appear.
 | `GLM_ALLOWED_ORIGINS` | local app URLs and `null` | Comma-separated CORS and WebSocket origins |
 | `MODEL_CACHE_ROOT` | `~/.models` | Cache root created by `./s` |
 | `OLLAMA_MODELS` | `~/.models/ollama` | Ollama cache exported by `./s` |
+| `OLLAMA_CONTEXT_LENGTH` | `4096` | Context limit used by launcher-managed Ollama |
+| `OLLAMA_KV_CACHE_TYPE` | `q8_0` | Lower-memory KV cache used by launcher-managed Ollama |
+| `OLLAMA_GPU_OVERHEAD` | `1073741824` | VRAM reserved so Ollama can offload layers instead of overcommitting |
+| `OLLAMA_MAX_LOADED_MODELS` | `1` | Prevent multiple models competing for VRAM |
+| `OLLAMA_NUM_PARALLEL` | `1` | Prevent concurrent requests duplicating context memory |
 | `HF_HOME` | `~/.models/hf` | Hugging Face cache exported by `./s` |
 | `MS_DIR` | `~/local/repos/CppLmmModelStore` | CppLmmModelStore checkout reported by the UI |
 | `DEEPSEEK_MODEL_HOME` | platform data directory | ModelStore directory listed by the UI |
@@ -286,6 +294,9 @@ Edge and `msedgedriver` are available on `PATH`; set `EDGE_BIN` and
 
 - **No models found:** verify that `GLM_BASE_URL/v1/models` returns an
   OpenAI-compatible model list.
+- **CUDA buffer allocation fails:** select `qwen2.5-coder:7b` or another model
+  below 5 GB, close other GPU-heavy applications, and restart with `./s`. The
+  launcher permits CPU offload and does not require replacing the GPU.
 - **Ollama model is not installed:** run `ollama pull <model>` before `./s`.
 - **Port already in use:** stop the existing server or set another `PORT`.
 - **Outside sandbox:** choose a path under `SAFE_ROOT`; symlink escapes are
