@@ -1015,10 +1015,11 @@ function KaiConsolePanel({view,rhoMirror,onMirrorChange}){
   viewRef.current=view;
   const clean=text=>text.replace(/\r/g,'');
   const send=value=>{if(wsRef.current?.readyState===WebSocket.OPEN)wsRef.current.send(JSON.stringify(value));};
-  const refreshExecutors=()=>send({type:'inspect_tree'});
+  const requestId=()=>crypto.randomUUID?.()||`${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const refreshExecutors=()=>send({type:'inspect_tree',id:requestId()});
 
   useEffect(()=>{
-    const socket=new WebSocket(API.replace(/^http/,'ws')+'/api/kai');
+    const socket=new WebSocket(API.replace(/^http/,'ws')+'/api/kai?sid='+encodeURIComponent(SID));
     wsRef.current=socket;
     socket.onopen=()=>socket.send(JSON.stringify({type:'start',mode:'pi'}));
     socket.onmessage=event=>{
@@ -1026,10 +1027,19 @@ function KaiConsolePanel({view,rhoMirror,onMirrorChange}){
       if(msg.type==='ready'){
         setStatus('connected');
         if(viewRef.current==='rho')socket.send(JSON.stringify({type:'input',data:'rho'}));
-        if(viewRef.current==='tree'||viewRef.current==='debugger')socket.send(JSON.stringify({type:'inspect_tree'}));
+        if(viewRef.current==='tree'||viewRef.current==='debugger')socket.send(JSON.stringify({type:'inspect_tree',id:requestId()}));
       }
       else if(msg.type==='stdout'||msg.type==='stderr')setOutput(text=>(text+clean(String(msg.data))).slice(-100000));
-      else if(msg.type==='tree')setTreeSnapshot(msg.data);
+      else if(msg.type==='tree'){
+        if(msg.data?.ok)setTreeSnapshot(msg.data);
+        else setOutput(text=>text+'\nTree error: '+(msg.data?.error||'request failed')+'\n');
+      }
+      else if(msg.type==='debug'){
+        const result=msg.data||{};
+        const text=result.ok?`${result.message||''}${result.stack?'\n'+result.stack:''}\n`:`Debug error: ${result.error||'request failed'}\n`;
+        setOutput(output=>(output+text).slice(-100000));
+        if(result.ok)refreshExecutors();
+      }
       else if(msg.type==='error'){setStatus('error');setOutput(text=>text+'\nError: '+msg.data+'\n');}
       else if(msg.type==='exit'){setStatus('exited');setOutput(text=>text+`\n[CppKAI exited ${msg.data}]\n`);}
     };
@@ -1054,8 +1064,7 @@ function KaiConsolePanel({view,rhoMirror,onMirrorChange}){
     setInp('');
   };
   const debugAction=(executorId,action)=>{
-    send({type:'debug_action',executorId,action});
-    setTimeout(refreshExecutors,150);
+    send({type:'debug_action',id:requestId(),executorId,action});
   };
   const onKey=event=>{
     if(event.key==='Enter')run(inp);

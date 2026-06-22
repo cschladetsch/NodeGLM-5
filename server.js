@@ -378,25 +378,6 @@ function wsDecode(buffer){
   }
   return {opcode,text:payload.toString('utf8'),rest:buffer.slice(offset+maskBytes+len)};
 }
-function parseKaiTreeSnapshot(text){
-  const unescapeField=value=>String(value||'').replace(/\\([\\tn])/g,(_match,char)=>
-    char==='t'?'\t':char==='n'?'\n':'\\');
-  const executors=new Map();
-  for(const line of text.replace(/\u001b\[[0-9;]*m/g,'').split(/\r?\n/)){
-    const fields=line.split('\t');
-    if(fields[0]==='EXEC'&&fields.length>=8){
-      const executor={id:fields[1],treeId:fields[2],rootId:fields[3],scopeId:fields[4],
-        dataSize:Number(fields[5])||0,contextSize:Number(fields[6])||0,
-        scope:unescapeField(fields.slice(7).join('\t')),nodes:[]};
-      executors.set(executor.id,executor);
-    }else if(fields[0]==='NODE'&&fields.length>=8){
-      const executor=executors.get(fields[1]);
-      if(executor)executor.nodes.push({id:fields[2],parentId:fields[3],depth:Number(fields[4])||0,
-        label:unescapeField(fields[5]),type:unescapeField(fields[6]),path:unescapeField(fields.slice(7).join('\t'))});
-    }
-  }
-  return {executors:[...executors.values()]};
-}
 function ensureKaiENet(){
   const kaiEnet=path.join(KAI_DIR,'Ext/ENet');
   try{
@@ -406,8 +387,114 @@ function ensureKaiENet(){
     }
   }catch{}
 }
+const kaiRuntimes=new Map();
+const validRequestId=id=>/^[A-Za-z0-9._-]{1,128}$/.test(String(id));
+const sendSocket=(socket,type,data)=>{
+  if(socket.writable)socket.write(wsFrame(JSON.stringify({type,data})));
+};
+function createKaiRuntime(sid){
+  const runtime={sid,proc:null,mode:'pi',clients:new Set(),pending:new Map(),
+    controlBuffer:'',lastUsed:Date.now(),idleTimer:null};
+  runtime.broadcast=(type,data)=>{
+    for(const client of runtime.clients)sendSocket(client,type,data);
+  };
+  runtime.touch=()=>{
+    runtime.lastUsed=Date.now();
+    if(runtime.idleTimer){clearTimeout(runtime.idleTimer);runtime.idleTimer=null;}
+  };
+  runtime.stop=()=>{
+    if(runtime.proc)runtime.proc.kill('SIGTERM');
+    runtime.proc=null;
+    for(const pending of runtime.pending.values())clearTimeout(pending.timer);
+    runtime.pending.clear();
+    runtime.controlBuffer='';
+  };
+  runtime.detach=socket=>{
+    runtime.clients.delete(socket);
+    for(const [id,pending] of runtime.pending)if(pending.socket===socket){
+      clearTimeout(pending.timer);runtime.pending.delete(id);
+    }
+    if(!runtime.clients.size&&!runtime.idleTimer){
+      runtime.idleTimer=setTimeout(()=>{
+        runtime.stop();
+        kaiRuntimes.delete(sid);
+      },SESSION_TTL);
+      runtime.idleTimer.unref();
+    }
+  };
+  runtime.register=(id,socket)=>{
+    if(runtime.pending.has(id))return false;
+    const timer=setTimeout(()=>{
+      const pending=runtime.pending.get(id);
+      if(!pending)return;
+      runtime.pending.delete(id);
+      sendSocket(pending.socket,'error',`CppKAI request ${id} timed out`);
+    },30000);
+    timer.unref();
+    runtime.pending.set(id,{socket,timer});
+    return true;
+  };
+  runtime.start=mode=>{
+    runtime.touch();
+    if(runtime.proc)return true;
+    if(!fs.existsSync(KAI_CONSOLE))return false;
+    ensureKaiENet();
+    runtime.mode=['pi','rho','debugger'].includes(mode)?mode:'pi';
+    const args=runtime.mode==='debugger'?['-l','pi','-t','5','--verbose']:['-l',runtime.mode];
+    const child=spawn(KAI_CONSOLE,args,{
+      cwd:KAI_DIR,
+      env:{...process.env,TERM:'xterm-256color',KAI_CONTROL_FD:'3'},
+      stdio:['pipe','pipe','pipe','pipe']
+    });
+    runtime.proc=child;
+    child.stdout.on('data',data=>runtime.broadcast('stdout',data.toString()));
+    child.stderr.on('data',data=>runtime.broadcast('stderr',data.toString()));
+    child.stdin.on('error',error=>runtime.broadcast('error',error.message));
+    child.stdio[3].on('error',error=>runtime.broadcast('error',error.message));
+    child.stdio[3].on('data',data=>{
+      runtime.controlBuffer+=data.toString();
+      if(runtime.controlBuffer.length>4*1024*1024){
+        runtime.broadcast('error','CppKAI control response exceeded 4 MiB');
+        runtime.stop();
+        return;
+      }
+      let newline;
+      while((newline=runtime.controlBuffer.indexOf('\n'))>=0){
+        const line=runtime.controlBuffer.slice(0,newline);
+        runtime.controlBuffer=runtime.controlBuffer.slice(newline+1);
+        if(!line)continue;
+        let response;
+        try{response=JSON.parse(line);}catch{
+          runtime.broadcast('error','Malformed CppKAI control response');
+          continue;
+        }
+        const pending=runtime.pending.get(String(response.id));
+        runtime.pending.delete(String(response.id));
+        if(pending){clearTimeout(pending.timer);sendSocket(pending.socket,response.type,response);}
+      }
+    });
+    child.on('error',error=>runtime.broadcast('error',error.message));
+    child.on('close',code=>{
+      if(runtime.proc!==child)return;
+      runtime.proc=null;
+      for(const pending of runtime.pending.values())clearTimeout(pending.timer);
+      runtime.pending.clear();
+      runtime.broadcast('exit',code);
+    });
+    return true;
+  };
+  return runtime;
+}
+function getKaiRuntime(sid){
+  let runtime=kaiRuntimes.get(sid);
+  if(!runtime){runtime=createKaiRuntime(sid);kaiRuntimes.set(sid,runtime);}
+  runtime.touch();
+  return runtime;
+}
 server.on('upgrade',(req,socket,head)=>{
-  if(req.url!=='/api/kai'){socket.destroy();return;}
+  const wsUrl=new URL(req.url,'http://localhost');
+  const sid=wsUrl.searchParams.get('sid');
+  if(wsUrl.pathname!=='/api/kai'||!validSessionId(sid)){socket.destroy();return;}
   if(req.headers.origin&&!allowedOrigins.has(req.headers.origin)){socket.destroy();return;}
   const key=req.headers['sec-websocket-key'];
   if(!key){socket.destroy();return;}
@@ -423,12 +510,10 @@ server.on('upgrade',(req,socket,head)=>{
     ''
   ].join('\r\n'));
 
-  let proc=null,inspecting=false,inspectionBuffer='';
+  const runtime=getKaiRuntime(sid);
+  runtime.clients.add(socket);
   let recv=head&&head.length?Buffer.from(head):Buffer.alloc(0);
-  const send=(type,data)=>{
-    if(!socket.writable)return;
-    socket.write(wsFrame(JSON.stringify({type,data})));
-  };
+  const send=(type,data)=>sendSocket(socket,type,data);
   socket.on('data',chunk=>{
     recv=Buffer.concat([recv,chunk]);
     while(true){
@@ -439,51 +524,37 @@ server.on('upgrade',(req,socket,head)=>{
       if(msg.opcode!==0x1)continue;
       let parsed;
       try{parsed=JSON.parse(msg.text);}catch{send('error','Invalid request');continue;}
-      if(parsed.type==='start'&&!proc){
+      runtime.touch();
+      if(parsed.type==='start'){
         const mode=['pi','rho','debugger'].includes(parsed.mode)?parsed.mode:'pi';
-        if(!fs.existsSync(KAI_CONSOLE))return send('error','CppKAI Console is not built');
-        ensureKaiENet();
-        const args=mode==='debugger'?['-l','pi','-t','5','--verbose']:['-l',mode];
-        const quote=value=>`'${String(value).replace(/'/g,"'\\''")}'`;
-        const command=[KAI_CONSOLE,...args].map(quote).join(' ');
-        proc=spawn('script',['-qefc',command,'/dev/null'],{
-          cwd:KAI_DIR,
-          env:{...process.env,TERM:'xterm-256color'},
-          stdio:['pipe','pipe','pipe']
-        });
-        proc.stdout.on('data',data=>{
-          const text=data.toString();
-          if(!inspecting){send('stdout',text);return;}
-          inspectionBuffer+=text;
-          const begin=inspectionBuffer.indexOf('NODEGLM_TREE_BEGIN');
-          const end=inspectionBuffer.indexOf('NODEGLM_TREE_END');
-          if(end<0)return;
-          if(begin>=0)send('tree',parseKaiTreeSnapshot(inspectionBuffer.slice(begin,end)));
-          else send('error','Malformed Executor tree snapshot');
-          inspecting=false;inspectionBuffer='';
-        });
-        proc.stderr.on('data',data=>send('stderr',data.toString()));
-        proc.on('error',error=>send('error',error.message));
-        proc.on('close',code=>{send('exit',code);proc=null;});
-        send('ready',mode);
-      }else if(parsed.type==='input'&&proc){
-        proc.stdin.write(String(parsed.data||'')+'\n');
-      }else if(parsed.type==='inspect_tree'&&proc&&!inspecting){
-        inspecting=true;inspectionBuffer='';
-        proc.stdin.write('__nodeglm_tree__\n');
-      }else if(parsed.type==='debug_action'&&proc){
+        if(!runtime.start(mode))return send('error','CppKAI Console is not built');
+        send('ready',runtime.mode);
+      }else if(parsed.type==='input'&&runtime.proc){
+        runtime.proc.stdin.write(String(parsed.data||'')+'\n');
+      }else if(parsed.type==='inspect_tree'&&runtime.proc){
+        const id=String(parsed.id||'');
+        if(!validRequestId(id))return send('error','Invalid request id');
+        if(!runtime.register(id,socket))return send('error','Duplicate request id');
+        runtime.proc.stdio[3].write(`__nodeglm_tree__ ${id}\n`);
+      }else if(parsed.type==='debug_action'&&runtime.proc){
+        const requestId=String(parsed.id||'');
         const id=String(parsed.executorId||'');
         const action=String(parsed.action||'');
-        if(!/^\d+$/.test(id)||!['step','continue','stack','clear'].includes(action)){
+        if(!validRequestId(requestId)||!/^\d+$/.test(id)||!['step','continue','stack','clear'].includes(action)){
           send('error','Invalid Executor debug action');continue;
         }
-        proc.stdin.write(`__nodeglm_debug__ ${id} ${action}\n`);
-      }else if(parsed.type==='stop'&&proc){
-        proc.kill('SIGTERM');proc=null;
+        if(!runtime.register(requestId,socket))return send('error','Duplicate request id');
+        runtime.proc.stdio[3].write(`__nodeglm_debug__ ${requestId} ${id} ${action}\n`);
+      }else if(parsed.type==='stop'&&runtime.proc){
+        runtime.stop();
       }
     }
   });
-  socket.on('close',()=>{if(proc)proc.kill('SIGTERM');});
+  socket.on('close',()=>runtime.detach(socket));
+});
+server.on('close',()=>{
+  for(const runtime of kaiRuntimes.values())runtime.stop();
+  kaiRuntimes.clear();
 });
 app.use((error,_req,res,_next)=>{
   if(error.message==='Origin not allowed')return res.status(403).json({error:error.message});

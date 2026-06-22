@@ -220,17 +220,18 @@ model on the inference server.
 | `POST /api/fs/write` | Save browser editor content |
 | `GET /api/modelstore` | Report locally cached ModelStore entries |
 | `GET /api/health` | Check the model endpoint and report active settings |
-| `WS /api/kai` | Bridge the browser to a CppKAI console process |
+| `WS /api/kai?sid=...` | Attach the browser to its session-owned CppKAI runtime |
 
 Session identifiers may contain letters, digits, `.`, `_`, and `-`, with a
 maximum length of 128 characters.
 
 ## CppKAI Runtime Views
 
-Pi, Rho, Debug, and Tree are views over one persistent CppKAI Console connection
-while the runtime panel remains mounted. Pi prints the complete data stack after
-each command. Stack entries are shown top-first, with `[0]` on the physical
-bottom line; floating-point values use the normal neutral value color.
+Pi, Rho, Debug, and Tree are views over one session-owned CppKAI runtime. The
+runtime survives panel and websocket reconnections and expires with the browser
+session. Pi prints the complete data stack after each command. Stack entries
+are shown top-first, with `[0]` on the physical bottom line; floating-point
+values use the normal neutral value color.
 
 Debug and Tree never assume a single Executor. Each has an independent dropdown
 populated from all live `Executor` objects in the runtime Registry:
@@ -240,12 +241,11 @@ populated from all live `Executor` objects in the runtime Registry:
 - **Tree** renders the selected Executor's own `Tree*`, root, scope, and bounded
   child hierarchy.
 
-The websocket accepts `inspect_tree` and validated `debug_action` messages. Tree
-snapshots are emitted by the Console as a private machine-readable protocol,
-parsed by `server.js`, and delivered to the browser as structured data. KAI
-initializes its native `Logger`; snapshot lifecycle, debugger attachments and
-actions, and failures are recorded through that logging system. Protocol data
-continues to use stdout because it is transport, not diagnostic logging.
+The websocket accepts request-ID-correlated `inspect_tree` and validated
+`debug_action` messages. Requests and newline-delimited JSON responses share a
+dedicated duplex control file descriptor; stdout and stderr remain terminal
+streams. KAI initializes its native `Logger`; snapshot lifecycle, debugger
+attachments and actions, and failures are recorded through that logging system.
 
 ## Security
 

@@ -146,15 +146,17 @@ test('Debug and Tree explicitly select live Executors',()=>{
   assert.match(html,/function TreeInspector/);
   assert.match(html,/function DebugInspector/);
   assert.match(html,/type:'inspect_tree'/);
-  assert.match(html,/type:'debug_action',executorId,action/);
-  assert.match(server,/parseKaiTreeSnapshot/);
+  assert.match(html,/type:'debug_action',id:requestId\(\),executorId,action/);
+  assert.match(html,/api\/kai\?sid=/);
+  assert.match(server,/KAI_CONTROL_FD:'3'/);
+  assert.match(server,/runtime\.register\(requestId,socket\)/);
   assert.match(server,/parsed\.type==='debug_action'/);
 });
 
 test('Executor inspection and debugging use KAI logging',()=>{
   assert.match(kaiMain,/Logger::Init\(\)/);
   assert.match(kaiConsole,/Logger::Info\("Executor tree snapshot requested"\)/);
-  assert.match(kaiConsole,/Logger::Error\("Debug attach failed/);
+  assert.match(kaiConsole,/Logger::Error\(message\)/);
   assert.match(kaiConsole,/Logger::Info\("Debug action '/);
 });
 
@@ -201,7 +203,9 @@ test('server.js exposes the current REPL and filesystem endpoints',()=>{
 test('server.js exposes the KAI websocket bridge',()=>{
   assert.match(server,/api\/kai/);
   assert.match(server,/CppKAI Console is not built/);
-  assert.match(server,/spawn\('script',\['-qefc',command,'\/dev\/null'\]/);
+  assert.match(server,/spawn\(KAI_CONSOLE,args/);
+  assert.match(server,/const kaiRuntimes=new Map\(\)/);
+  assert.match(server,/socket\.on\('close',\(\)=>runtime\.detach\(socket\)\)/);
 });
 
 test('./s is no longer the implementation for CppKAI or the editor',()=>{
