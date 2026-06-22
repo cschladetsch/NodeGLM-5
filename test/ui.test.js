@@ -6,6 +6,8 @@ const path=require('node:path');
 const html=fs.readFileSync(path.join(__dirname,'..','index.html'),'utf8');
 const launcher=fs.readFileSync(path.join(__dirname,'..','s'),'utf8');
 const server=fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8');
+const kaiConsole=fs.readFileSync(path.join(__dirname,'..','Ext','CppKAI','Ext','CppKaiCore','Source','Library','Executor','Source','Console.cpp'),'utf8');
+const kaiMain=fs.readFileSync(path.join(__dirname,'..','Ext','CppKAI','Source','App','Console','Source','Main.cpp'),'utf8');
 const submodules=fs.readFileSync(path.join(__dirname,'..','.gitmodules'),'utf8');
 
 test('Ace loads from the pinned CDN and configures its module base',()=>{
@@ -37,6 +39,18 @@ test('RHS Bash cwd is propagated to the file browser',()=>{
   assert.match(html,/api\/session\?sid=/);
 });
 
+test('Chat Box cwd changes render directly in the Bash panel',()=>{
+  assert.match(html,/<ChatPanel[\s\S]*?onCwdChange=\{setCwd\}/);
+  assert.match(html,/<span className="repl-cwd">\{cwd \|\| '~'\}<\/span>/);
+  assert.doesNotMatch(html,/\[replCwd, setReplCwd\]/);
+});
+
+test('Bash input regains focus after every command settles',()=>{
+  assert.match(html,/const inputRef = useRef\(null\)/);
+  assert.match(html,/if \(!running\) inputRef\.current\?\.focus\(\)/);
+  assert.match(html,/<input\s+ref=\{inputRef\}/);
+});
+
 test('header selects among models installed in the active endpoint',()=>{
   assert.match(html,/className="model-select"/);
   assert.match(html,/api\/models\?sid=/);
@@ -65,6 +79,20 @@ test('chat executes bounded tools and requires write approval',()=>{
   assert.match(html,/Approve command/);
   assert.match(html,/resolveAction\(false\)/);
   assert.match(html,/resultMessage/);
+});
+
+test('chat chooses tools according to whether a factual answer needs a lookup',()=>{
+  assert.match(server,/stable general-knowledge questions directly when you know the answer confidently/);
+  assert.match(server,/Use a network-capable tool when the user asks for a lookup, the information may have changed, or verification would materially improve the answer/);
+  assert.match(server,/Do not reach for a tool merely because a factual question was asked/);
+});
+
+test('Chat Box treats the Bash cwd as authoritative command context',()=>{
+  assert.match(server,/\[cwd: \.\.\.\] marker on the latest message is the authoritative current directory shared with the Bash panel/);
+  assert.match(server,/If the user enters a shell command such as cd, pwd, or ls, execute it with TOOL:bash/);
+  assert.match(html,/const directCd=\/\^cd/);
+  assert.match(html,/setPendingAction\(\{call,history:\[\],step:0,messageId:id,resume:false\}\)/);
+  assert.match(html,/if\(pending\.resume===false\)/);
 });
 
 test('chat supports cancellation and health checks inference readiness',()=>{
@@ -108,10 +136,32 @@ test('index.html exposes the right-side Bash and KAI buttons',()=>{
   assert.match(html,/Rho/);
   assert.match(html,/Debug/);
   assert.match(html,/right-resizer/);
-  assert.match(html,/KaiConsolePanel mode="pi"/);
-  assert.match(html,/KaiConsolePanel mode="rho"/);
-  assert.match(html,/KaiConsolePanel mode="debugger"/);
+  assert.match(html,/KaiConsolePanel view=\{rtab\}/);
+  assert.match(html,/\['bash','pi','rho','debugger','tree'\]/);
   assert.match(html,/WebSocket\(API\.replace\(/);
+});
+
+test('Debug and Tree explicitly select live Executors',()=>{
+  assert.match(html,/function ExecutorSelect/);
+  assert.match(html,/function TreeInspector/);
+  assert.match(html,/function DebugInspector/);
+  assert.match(html,/type:'inspect_tree'/);
+  assert.match(html,/type:'debug_action',executorId,action/);
+  assert.match(server,/parseKaiTreeSnapshot/);
+  assert.match(server,/parsed\.type==='debug_action'/);
+});
+
+test('Executor inspection and debugging use KAI logging',()=>{
+  assert.match(kaiMain,/Logger::Init\(\)/);
+  assert.match(kaiConsole,/Logger::Info\("Executor tree snapshot requested"\)/);
+  assert.match(kaiConsole,/Logger::Error\("Debug attach failed/);
+  assert.match(kaiConsole,/Logger::Info\("Debug action '/);
+});
+
+test('Pi output omits native prompt numbering but preserves stack indices',()=>{
+  assert.match(html,/line=line\.replace\(\/\\\[\\d\+\\\]\\s\*\//);
+  assert.doesNotMatch(html,/line=line\.replace\(\/\\\[\\d\+\\\]:\\s\*\//);
+  assert.match(html,/mode==='pi'&&visible==='π'/);
 });
 
 test('file browser hides dotfiles by default',()=>{

@@ -106,6 +106,27 @@ test('Edge edits and saves a C++ file through Ace', {skip}, async()=>{
     for(let i=0;i<50&&fs.readFileSync(path.join(root,'sample.cpp'),'utf8').includes('main');i++)
       await sleep(100);
     assert.equal(fs.readFileSync(path.join(root,'sample.cpp'),'utf8'),'int answer() { return 42; }\n');
+
+    const treeReady=async tab=>{
+      await execute(`
+        [...document.querySelectorAll('.right-tab')]
+          .find(node=>node.textContent.trim()==='${tab}')?.click();
+      `);
+      for(let i=0;i<100;i++){
+        const state=await execute(`return {
+          options:document.querySelectorAll('.executor-toolbar select option').length,
+          nodes:document.querySelectorAll('.tree-node').length
+        };`);
+        if(state.options>0)return state;
+        await sleep(100);
+      }
+      return {options:0,nodes:0};
+    };
+    const tree=await treeReady('TREE');
+    assert.ok(tree.options>0,'Tree panel lists live Executors');
+    assert.ok(tree.nodes>0,'Tree panel renders the selected Executor tree');
+    const debug=await treeReady('DEBUG');
+    assert.ok(debug.options>0,'Debug panel lists live Executors');
   }finally{
     if(sessionId)await request('DELETE',`/session/${sessionId}`).catch(()=>{});
     child.kill();

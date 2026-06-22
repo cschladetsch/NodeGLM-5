@@ -505,6 +505,16 @@
   }
   .kai-head .on { color: var(--accent2); }
   .kai-head .off { color: var(--warn); }
+  .executor-inspector { flex:1;min-height:0;display:flex;flex-direction:column;background:var(--bg); }
+  .executor-toolbar { display:flex;gap:7px;align-items:center;padding:8px 10px;border-bottom:1px solid var(--border); }
+  .executor-toolbar select { flex:1;min-width:0;background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:5px 7px;font:11px var(--mono); }
+  .executor-meta { padding:7px 10px;color:var(--muted);border-bottom:1px solid var(--border);font:10px/1.5 var(--mono); }
+  .tree-nodes { flex:1;overflow:auto;padding:8px 0;font:11px/1.55 var(--mono); }
+  .tree-node { display:flex;gap:7px;padding:1px 10px;white-space:nowrap; }
+  .tree-node:hover { background:var(--raised); }
+  .tree-label { color:var(--text); }
+  .tree-type { color:var(--muted); }
+  .debug-actions { display:flex;gap:6px;padding:8px 10px;border-bottom:1px solid var(--border); }
   .kai-out {
     flex: 1;
     overflow: auto;
@@ -817,14 +827,16 @@ function ReplPanel({ cwd, onCwdChange }) {
   const [running, setRunning] = useState(false);
   const [history, setHistory] = useState([]);
   const [histIdx, setHistIdx] = useState(-1);
-  const [replCwd, setReplCwd] = useState(cwd || '');
   const outputRef = useRef(null);
+  const inputRef = useRef(null);
 
   useEffect(() => {
     if (outputRef.current) outputRef.current.scrollTop = outputRef.current.scrollHeight;
   }, [lines]);
 
-  useEffect(() => { if (cwd) setReplCwd(cwd); }, [cwd]);
+  useEffect(() => {
+    if (!running) inputRef.current?.focus();
+  }, [running]);
 
   const run = async (cmd) => {
     if (!cmd.trim()) return;
@@ -843,7 +855,6 @@ function ReplPanel({ cwd, onCwdChange }) {
       if (d.stderr) d.stderr.split('\n').filter(Boolean).forEach(l => setLines(ls => [...ls, { type:'err', text: l }]));
       setLines(ls => [...ls, { type:'info', text: `exit ${d.exitCode}` }]);
       if (d.cwd) {
-        setReplCwd(d.cwd);
         onCwdChange?.(d.cwd);
       }
     } catch(e) {
@@ -867,7 +878,7 @@ function ReplPanel({ cwd, onCwdChange }) {
     <div className="repl-panel">
       <div className="repl-toolbar">
         <span style={{fontSize:13}}>⚡</span>
-        <span className="repl-cwd">{replCwd || '~'}</span>
+        <span className="repl-cwd">{cwd || '~'}</span>
         <button className="btn btn-ghost" style={{fontSize:11,padding:'4px 8px'}}
           onClick={() => setLines([{ type:'info', text:'Cleared.' }])}>
           Clear
@@ -885,6 +896,7 @@ function ReplPanel({ cwd, onCwdChange }) {
       <div className="repl-input-row">
         <span style={{color:'var(--accent2)',fontFamily:'var(--mono)',fontSize:13}}>$</span>
         <input
+          ref={inputRef}
           value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={onKey}
@@ -909,14 +921,13 @@ const ANSI_FG={
 const ANSI_BG={40:'#0a0a0d',41:'#5a2020',42:'#164a39',43:'#55451d',44:'#203858',45:'#482451',46:'#17484d',47:'#d0d0dc'};
 
 function normalizeKaiIndices(text,mode){
-  let promptIndex=0,stackIndex=0;
   const sgr='(?:\\u001b\\[[0-9;]*m)*';
   const promptPattern=new RegExp(`\\[\\d+\\](?=${sgr}\\s+${sgr}[πρλ$])`);
-  const stackPattern=new RegExp(`\\[\\d+\\](?=${sgr}:\\s)`);
   return text.split('\n').map(line=>{
-    if(promptPattern.test(line)){stackIndex=0;return line.replace(/\[\d+\]/,`[${++promptIndex}]`);}
-    if(stackPattern.test(line))return mode==='pi'?line:line.replace(/\[\d+\]/,`[${stackIndex++}]`);
-    stackIndex=0;return line;
+    if(promptPattern.test(line))line=line.replace(/\[\d+\]\s*/, '');
+    const visible=line.replace(/\u001b\[[0-9;]*m/g,'').trim();
+    if(mode==='pi'&&visible==='π')return '';
+    return line;
   }).join('\n');
 }
 
@@ -947,33 +958,91 @@ function AnsiOutput({text,mode}){
   return <>{parts}</>;
 }
 
-function KaiConsolePanel({mode,rhoMirror,onMirrorChange}){
-  const title=mode==='debugger'?'Debugger':mode==='rho'?'Rho':'Pi';
-  const prompt=mode==='debugger'?'debug π>':mode==='rho'?'ρ>':'π>';
+function ExecutorSelect({executors,value,onChange}){
+  return <select value={value} onChange={event=>onChange(event.target.value)} disabled={!executors.length}>
+    {!executors.length&&<option value="">No Executors</option>}
+    {executors.map(exec=><option key={exec.id} value={exec.id}>Executor #{exec.id}</option>)}
+  </select>;
+}
+
+function TreeInspector({snapshot,onRefresh}){
+  const executors=snapshot?.executors||[];
+  const [selected,setSelected]=useState('');
+  useEffect(()=>{if(!executors.some(exec=>exec.id===selected))setSelected(executors[0]?.id||'');},[snapshot,selected]);
+  const exec=executors.find(item=>item.id===selected);
+  return <div className="executor-inspector">
+    <div className="executor-toolbar"><ExecutorSelect executors={executors} value={selected} onChange={setSelected}/>
+      <button className="btn bg" onClick={onRefresh}>Refresh</button></div>
+    {exec&&<div className="executor-meta">Tree {exec.treeId||'none'} · root #{exec.rootId} · scope {exec.scope||'#'+exec.scopeId}</div>}
+    <div className="tree-nodes">
+      {!exec&&<div className="executor-meta">No live Executors.</div>}
+      {exec&&exec.nodes.length===0&&<div className="executor-meta">This Executor has no Tree nodes.</div>}
+      {exec?.nodes.map(node=><div className="tree-node" key={node.id} style={{paddingLeft:10+node.depth*16}} title={node.path}>
+        <span className="tree-label">{node.label||'/'}</span><span className="tree-type">{node.type} #{node.id}</span>
+      </div>)}
+    </div>
+  </div>;
+}
+
+function DebugInspector({snapshot,onRefresh,onAction,output}){
+  const executors=snapshot?.executors||[];
+  const [selected,setSelected]=useState('');
+  useEffect(()=>{if(!executors.some(exec=>exec.id===selected))setSelected(executors[0]?.id||'');},[snapshot,selected]);
+  const exec=executors.find(item=>item.id===selected);
+  return <div className="executor-inspector">
+    <div className="executor-toolbar"><ExecutorSelect executors={executors} value={selected} onChange={setSelected}/>
+      <button className="btn bg" onClick={onRefresh}>Refresh</button></div>
+    {exec&&<div className="executor-meta">Tree {exec.treeId||'none'} · data {exec.dataSize} · context {exec.contextSize} · scope {exec.scope||'#'+exec.scopeId}</div>}
+    <div className="debug-actions">
+      {['step','continue','stack','clear'].map(action=><button key={action} className="btn bg" disabled={!exec} onClick={()=>onAction(selected,action)}>{action}</button>)}
+    </div>
+    <div className="kai-out"><AnsiOutput text={output||'Select an Executor to debug.\n'} mode="pi"/></div>
+  </div>;
+}
+
+function KaiConsolePanel({view,rhoMirror,onMirrorChange}){
+  const title=view==='debugger'?'Debugger':view==='tree'?'Tree':view==='rho'?'Rho':'Pi';
+  const prompt=view==='rho'?'ρ>':'π>';
   const [output,setOutput]=useState('');
   const [inp,setInp]=useState('');
   const [status,setStatus]=useState('connecting');
   const [hist,setHist]=useState([]);
   const [hi,setHi]=useState(-1);
+  const [treeSnapshot,setTreeSnapshot]=useState(null);
   const wsRef=useRef(null);
   const outRef=useRef(null);
+  const viewRef=useRef(view);
+  viewRef.current=view;
   const clean=text=>text.replace(/\r/g,'');
+  const send=value=>{if(wsRef.current?.readyState===WebSocket.OPEN)wsRef.current.send(JSON.stringify(value));};
+  const refreshExecutors=()=>send({type:'inspect_tree'});
 
   useEffect(()=>{
     const socket=new WebSocket(API.replace(/^http/,'ws')+'/api/kai');
     wsRef.current=socket;
-    socket.onopen=()=>socket.send(JSON.stringify({type:'start',mode}));
+    socket.onopen=()=>socket.send(JSON.stringify({type:'start',mode:'pi'}));
     socket.onmessage=event=>{
       const msg=JSON.parse(event.data);
-      if(msg.type==='ready')setStatus('connected');
+      if(msg.type==='ready'){
+        setStatus('connected');
+        if(viewRef.current==='rho')socket.send(JSON.stringify({type:'input',data:'rho'}));
+        if(viewRef.current==='tree'||viewRef.current==='debugger')socket.send(JSON.stringify({type:'inspect_tree'}));
+      }
       else if(msg.type==='stdout'||msg.type==='stderr')setOutput(text=>(text+clean(String(msg.data))).slice(-100000));
+      else if(msg.type==='tree')setTreeSnapshot(msg.data);
       else if(msg.type==='error'){setStatus('error');setOutput(text=>text+'\nError: '+msg.data+'\n');}
       else if(msg.type==='exit'){setStatus('exited');setOutput(text=>text+`\n[CppKAI exited ${msg.data}]\n`);}
     };
     socket.onerror=()=>setStatus('error');
     socket.onclose=()=>setStatus(s=>s==='exited'?s:'closed');
     return()=>{socket.close();wsRef.current=null;};
-  },[mode]);
+  },[]);
+
+  useEffect(()=>{
+    if(status!=='connected')return;
+    if(view==='pi'||view==='rho')send({type:'input',data:view});
+    else refreshExecutors();
+  },[view,status]);
 
   useEffect(()=>{if(outRef.current)outRef.current.scrollTop=outRef.current.scrollHeight;},[output]);
 
@@ -983,6 +1052,10 @@ function KaiConsolePanel({mode,rhoMirror,onMirrorChange}){
     setHist(h=>[command,...h.slice(0,199)]);
     setHi(-1);
     setInp('');
+  };
+  const debugAction=(executorId,action)=>{
+    send({type:'debug_action',executorId,action});
+    setTimeout(refreshExecutors,150);
   };
   const onKey=event=>{
     if(event.key==='Enter')run(inp);
@@ -994,11 +1067,13 @@ function KaiConsolePanel({mode,rhoMirror,onMirrorChange}){
     <div className="kai-panel">
       <div className="kai-head">
         <strong style={{color:'var(--accent)'}}>CppKAI {title}</strong><span style={{flex:1}}>Ext/CppKAI</span>
-        {mode==='debugger'&&<button className="btn bg" style={{fontSize:10,padding:'3px 7px'}} onClick={()=>run('stack')}>Stack</button>}
+        {(view==='tree'||view==='debugger')&&<button className="btn bg" style={{fontSize:10,padding:'3px 7px'}} onClick={refreshExecutors}>Refresh</button>}
         <button className="btn bg" style={{fontSize:10,padding:'3px 7px'}} onClick={()=>setOutput('')}>Clear</button>
         <span className={status==='connected'?'on':'off'}>{status}</span>
       </div>
-      {mode==='rho' ? (
+      {view==='tree' ? <TreeInspector snapshot={treeSnapshot} onRefresh={refreshExecutors}/>
+      : view==='debugger' ? <DebugInspector snapshot={treeSnapshot} onRefresh={refreshExecutors} onAction={debugAction} output={output}/>
+      : view==='rho' ? (
         <RhoEditorPanel
           value={inp}
           onChange={value=>{setInp(value); onMirrorChange?.(value);}}
@@ -1008,13 +1083,13 @@ function KaiConsolePanel({mode,rhoMirror,onMirrorChange}){
         />
       ) : (
         <>
-          {mode==='pi' && rhoMirror && (
+          {view==='pi' && rhoMirror && (
             <div style={{padding:'7px 10px',borderBottom:'1px solid var(--border)',background:'var(--bg)',fontSize:10,fontFamily:'var(--mono)',color:'var(--muted)',whiteSpace:'pre-wrap',maxHeight:140,overflow:'auto'}}>
               <div style={{color:'var(--accent)',marginBottom:4}}>Rho mirror</div>
               {rhoMirror}
             </div>
           )}
-          <div className="kai-out" ref={outRef}><AnsiOutput text={output||`Starting CppKAI ${title}…\n`} mode={mode}/></div>
+          <div className="kai-out" ref={outRef}><AnsiOutput text={output||`Starting CppKAI ${title}…\n`} mode={view}/></div>
         <div className="kai-input">
           <span style={{color:'var(--accent)',fontFamily:'var(--mono)'}}>{prompt}</span>
           <input value={inp} onChange={e=>setInp(e.target.value)} onKeyDown={onKey} disabled={status!=='connected'} placeholder="2 3 +"/>
@@ -1364,6 +1439,9 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
       }
       const resultMessage=toolResult(pending.call.tool,result);
       updateMessage(pending.messageId,{status:approved?'approved':'rejected',toolResult:result,resultMessage});
+      if(pending.resume===false){
+        setStreaming(false);return;
+      }
       await runAgent([...pending.history,{role:'user',content:resultMessage}],pending.step);
     }catch(error){
       updateMessage(pending.messageId,{status:'failed',toolResult:error.message});
@@ -1400,6 +1478,16 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
     setMessages(m => [...m, displayMsg]);
     setInput('');
     setAttachedFiles([]);
+
+    const directCd=/^cd(?:\s.*)?$/.test(input.trim());
+    if(directCd&&!context){
+      const call={tool:'bash',cmd:input.trim()};
+      const content=`TOOL:bash\nCMD:${call.cmd}\nEND_TOOL`;
+      const id=crypto.randomUUID?crypto.randomUUID():`${Date.now()}-${Math.random()}`;
+      setMessages(current=>[...current,{id,role:'assistant',content,toolCall:call,status:'approval required'}]);
+      setPendingAction({call,history:[],step:0,messageId:id,resume:false});
+      return;
+    }
 
     // build API messages using history fullContent for correct context
     const apiMessages = [
@@ -1621,17 +1709,15 @@ function App() {
         <div className={`right-resizer${resizing?' dragging':''}`} onPointerDown={resizeRight} title="Drag to resize side panel"/>
         <div className="right" style={{width:rightWidth}}>
           <div className="right-tabs">
-            {['bash','pi','rho','debugger'].map(t => (
+            {['bash','pi','rho','debugger','tree'].map(t => (
               <button key={t} className={`right-tab${rtab===t?' active':''}`} onClick={()=>setRtab(t)}>
-                {t==='bash'?'Bash':t==='pi'?'Pi':t==='rho'?'Rho':'Debug'}
+                {t==='bash'?'Bash':t==='pi'?'Pi':t==='rho'?'Rho':t==='debugger'?'Debug':'Tree'}
               </button>
             ))}
           </div>
           <div className="main">
             {rtab === 'bash' && <ReplPanel cwd={cwd} onCwdChange={setCwd}/>}
-            {rtab === 'pi' && <KaiConsolePanel mode="pi" rhoMirror={rhoMirror}/>}
-            {rtab === 'rho' && <KaiConsolePanel mode="rho" rhoMirror={rhoMirror} onMirrorChange={setRhoMirror}/>}
-            {rtab === 'debugger' && <KaiConsolePanel mode="debugger"/>}
+            {rtab !== 'bash' && <KaiConsolePanel view={rtab} rhoMirror={rhoMirror} onMirrorChange={setRhoMirror}/>}
           </div>
         </div>
       </div>

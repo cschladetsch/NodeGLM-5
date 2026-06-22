@@ -105,7 +105,9 @@ const SYSTEM=`You are GLM-Code, a helpful, precise, and expert conversational so
 You answer questions, explain code, and provide clear guidance on software development.
 When writing code, explain your design and provide complete, functional code blocks using standard markdown code fences (e.g. \`\`\`javascript).
 
-You can use tools when work in the current project is required. Emit exactly one tool request as the entire response:
+Answer ordinary conversation and stable general-knowledge questions directly when you know the answer confidently. Use a network-capable tool when the user asks for a lookup, the information may have changed, or verification would materially improve the answer. Do not reach for a tool merely because a factual question was asked.
+
+Use project tools when the user asks you to inspect, run, or change something in the current project, or when project files are required to answer. When a tool is needed, emit exactly one tool request as the entire response with no introduction or explanation:
 TOOL:bash
 CMD:<shell command>
 END_TOOL
@@ -121,6 +123,8 @@ CONTENT:
 END_TOOL
 
 After each request, the user will provide a TOOL_RESULT. Continue until the task is complete, then answer normally. Never claim a tool ran unless you received its TOOL_RESULT. Writes require user approval.
+
+The [cwd: ...] marker on the latest message is the authoritative current directory shared with the Bash panel. Resolve every relative path from it. If the user enters a shell command such as cd, pwd, or ls, execute it with TOOL:bash; do not merely describe the command or ask what to do next.
 `;
 
 app.post('/api/chat',(req,res)=>{
@@ -374,6 +378,25 @@ function wsDecode(buffer){
   }
   return {opcode,text:payload.toString('utf8'),rest:buffer.slice(offset+maskBytes+len)};
 }
+function parseKaiTreeSnapshot(text){
+  const unescapeField=value=>String(value||'').replace(/\\([\\tn])/g,(_match,char)=>
+    char==='t'?'\t':char==='n'?'\n':'\\');
+  const executors=new Map();
+  for(const line of text.replace(/\u001b\[[0-9;]*m/g,'').split(/\r?\n/)){
+    const fields=line.split('\t');
+    if(fields[0]==='EXEC'&&fields.length>=8){
+      const executor={id:fields[1],treeId:fields[2],rootId:fields[3],scopeId:fields[4],
+        dataSize:Number(fields[5])||0,contextSize:Number(fields[6])||0,
+        scope:unescapeField(fields.slice(7).join('\t')),nodes:[]};
+      executors.set(executor.id,executor);
+    }else if(fields[0]==='NODE'&&fields.length>=8){
+      const executor=executors.get(fields[1]);
+      if(executor)executor.nodes.push({id:fields[2],parentId:fields[3],depth:Number(fields[4])||0,
+        label:unescapeField(fields[5]),type:unescapeField(fields[6]),path:unescapeField(fields.slice(7).join('\t'))});
+    }
+  }
+  return {executors:[...executors.values()]};
+}
 function ensureKaiENet(){
   const kaiEnet=path.join(KAI_DIR,'Ext/ENet');
   try{
@@ -400,7 +423,7 @@ server.on('upgrade',(req,socket,head)=>{
     ''
   ].join('\r\n'));
 
-  let proc=null;
+  let proc=null,inspecting=false,inspectionBuffer='';
   let recv=head&&head.length?Buffer.from(head):Buffer.alloc(0);
   const send=(type,data)=>{
     if(!socket.writable)return;
@@ -428,13 +451,33 @@ server.on('upgrade',(req,socket,head)=>{
           env:{...process.env,TERM:'xterm-256color'},
           stdio:['pipe','pipe','pipe']
         });
-        proc.stdout.on('data',data=>send('stdout',data.toString()));
+        proc.stdout.on('data',data=>{
+          const text=data.toString();
+          if(!inspecting){send('stdout',text);return;}
+          inspectionBuffer+=text;
+          const begin=inspectionBuffer.indexOf('NODEGLM_TREE_BEGIN');
+          const end=inspectionBuffer.indexOf('NODEGLM_TREE_END');
+          if(end<0)return;
+          if(begin>=0)send('tree',parseKaiTreeSnapshot(inspectionBuffer.slice(begin,end)));
+          else send('error','Malformed Executor tree snapshot');
+          inspecting=false;inspectionBuffer='';
+        });
         proc.stderr.on('data',data=>send('stderr',data.toString()));
         proc.on('error',error=>send('error',error.message));
         proc.on('close',code=>{send('exit',code);proc=null;});
         send('ready',mode);
       }else if(parsed.type==='input'&&proc){
         proc.stdin.write(String(parsed.data||'')+'\n');
+      }else if(parsed.type==='inspect_tree'&&proc&&!inspecting){
+        inspecting=true;inspectionBuffer='';
+        proc.stdin.write('__nodeglm_tree__\n');
+      }else if(parsed.type==='debug_action'&&proc){
+        const id=String(parsed.executorId||'');
+        const action=String(parsed.action||'');
+        if(!/^\d+$/.test(id)||!['step','continue','stack','clear'].includes(action)){
+          send('error','Invalid Executor debug action');continue;
+        }
+        proc.stdin.write(`__nodeglm_debug__ ${id} ${action}\n`);
       }else if(parsed.type==='stop'&&proc){
         proc.kill('SIGTERM');proc=null;
       }
