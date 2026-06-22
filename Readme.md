@@ -14,7 +14,7 @@ flowchart LR
     Model["OpenAI-compatible endpoint<br/>Ollama, SGLang, or vLLM"]
     Files["Workspace files<br/>under SAFE_ROOT"]
     Shell["Bash subprocesses"]
-    Kai["CppKAI Console<br/>Pi, Rho, Debug"]
+    Kai["CppKAI runtime<br/>Pi, Rho, Debug, Tree"]
 
     Browser <-->|"HTTP, SSE"| Server
     Browser <-->|"WebSocket /api/kai"| Server
@@ -34,8 +34,8 @@ traffic, and starts local subprocesses. `index.html` contains the client UI.
 - An OpenAI-compatible model endpoint that implements `/v1/models` and
   `/v1/chat/completions`
 - Bash for the shell and agent command tools
-- Optional: CppKAI built at `Ext/CppKAI/Bin/Console` for the Pi, Rho, and Debug
-  tabs
+- Optional: CppKAI built at `Ext/CppKAI/Bin/Console` for the Pi, Rho, Debug,
+  and Tree tabs
 - Optional: Microsoft Edge and `msedgedriver` for the browser end-to-end test
 
 The default endpoint is Ollama at `http://localhost:11434`, using `glm4:9b`.
@@ -100,12 +100,14 @@ The UI has three persistent columns:
 - **Chat and editor:** streams model responses, runs the bounded agent loop, and
   edits files with Ace, Monokai, Vim bindings, syntax modes, and `Ctrl-S` or
   `Command-S` save.
-- **Tools:** provides the Bash REPL and optional Pi, Rho, and CppKAI debugger
-  consoles.
+- **Tools:** provides Bash plus a persistent CppKAI runtime with Pi, Rho,
+  executor-attached Debug, and executor-attached Tree views.
 
 Each browser session has its own current directory and selected model. A
-successful `cd` through the agent Bash tool updates the shared directory used by
-chat tools and the file browser for that session. Sessions are held in memory,
+successful `cd` in Bash or through the Chat Box updates the shared directory
+used by Chat tools, Bash, and the file browser for that session. A `cd ...`
+entered directly in Chat is routed through the normal command-approval flow
+without asking the model to interpret it. Sessions are held in memory,
 expire after 24 hours when capacity cleanup runs, and are lost when the server
 restarts.
 
@@ -115,6 +117,12 @@ The model can request `read_file`, `write_file`, or `bash`. Reads execute
 immediately. Commands and writes pause for explicit approval; proposed writes
 show a unified diff before anything is changed. The client stops a run after
 eight tool steps.
+
+Stable general-knowledge questions are answered directly when the model is
+confident. Network-capable tools remain available for explicit lookups,
+time-sensitive information, and verification. The current `[cwd: ...]` marker
+is authoritative model context; shell-shaped requests such as `cd`, `pwd`, and
+`ls` are expected to use the Bash tool.
 
 ```mermaid
 sequenceDiagram
@@ -217,6 +225,28 @@ model on the inference server.
 Session identifiers may contain letters, digits, `.`, `_`, and `-`, with a
 maximum length of 128 characters.
 
+## CppKAI Runtime Views
+
+Pi, Rho, Debug, and Tree are views over one persistent CppKAI Console connection
+while the runtime panel remains mounted. Pi prints the complete data stack after
+each command. Stack entries are shown top-first, with `[0]` on the physical
+bottom line; floating-point values use the normal neutral value color.
+
+Debug and Tree never assume a single Executor. Each has an independent dropdown
+populated from all live `Executor` objects in the runtime Registry:
+
+- **Debug** targets `step`, `continue`, `stack`, and `clear` actions at the
+  selected Executor handle.
+- **Tree** renders the selected Executor's own `Tree*`, root, scope, and bounded
+  child hierarchy.
+
+The websocket accepts `inspect_tree` and validated `debug_action` messages. Tree
+snapshots are emitted by the Console as a private machine-readable protocol,
+parsed by `server.js`, and delivered to the browser as structured data. KAI
+initializes its native `Logger`; snapshot lifecycle, debugger attachments and
+actions, and failures are recorded through that logging system. Protocol data
+continues to use stdout because it is transport, not diagnostic logging.
+
 ## Security
 
 The server binds to loopback by default. Do not bind `HOST` to a network
@@ -239,7 +269,8 @@ npm test
 
 The Node test suite covers API validation, path traversal and symlink defenses,
 session isolation, working-directory propagation, model selection, write diffs,
-UI wiring, and editor configuration. The Edge end-to-end test runs only when
+executor inspection/debug wiring, Tree rendering, UI wiring, and editor
+configuration. The Edge end-to-end test runs only when
 Edge and `msedgedriver` are available on `PATH`; set `EDGE_BIN` and
 `MSEDGEDRIVER` to use explicit executable paths.
 

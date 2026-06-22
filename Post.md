@@ -16,9 +16,15 @@ The current workspace includes:
 - explicit approval for shell commands and file writes;
 - diff previews before agent-proposed changes are applied;
 - an Ace editor with Vim bindings and syntax highlighting;
-- a filesystem browser and Bash REPL with a shared working directory;
+- a filesystem browser, Chat Box, and Bash REPL with a shared working directory;
 - per-session model selection; and
-- optional Pi, Rho, and debugger consoles through CppKAI.
+- a persistent CppKAI runtime with Pi and Rho consoles plus executor-attached
+  Debug and Tree panels.
+
+The CppKAI integration does not assume one Executor. Debug and Tree each expose
+their own live-Executor selector. Tree renders the selected Executor's object
+hierarchy, while Debug directs step, continue, stack, and clear operations to
+the selected handle. Runtime diagnostics go through KAI's logging system.
 
 One implementation detail that matters is the filesystem boundary. File APIs
 resolve paths against a configured `SAFE_ROOT`, canonicalize existing ancestors,
