@@ -5,7 +5,9 @@ const path=require('node:path');
 
 const html=fs.readFileSync(path.join(__dirname,'..','index.html'),'utf8');
 const launcher=fs.readFileSync(path.join(__dirname,'..','s'),'utf8');
+const windowLauncher=fs.readFileSync(path.join(__dirname,'..','Scripts','open-app-window.sh'),'utf8');
 const server=fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8');
+const uiConfig=JSON.parse(fs.readFileSync(path.join(__dirname,'..','ui-config.json'),'utf8'));
 const kaiConsole=fs.readFileSync(path.join(__dirname,'..','Ext','CppKAI','Ext','CppKaiCore','Source','Library','Executor','Source','Console.cpp'),'utf8');
 const kaiMain=fs.readFileSync(path.join(__dirname,'..','Ext','CppKAI','Source','App','Console','Source','Main.cpp'),'utf8');
 const submodules=fs.readFileSync(path.join(__dirname,'..','.gitmodules'),'utf8');
@@ -87,6 +89,12 @@ test('chat chooses tools according to whether a factual answer needs a lookup',(
   assert.match(server,/Do not reach for a tool merely because a factual question was asked/);
 });
 
+test('chat understands that NodeGLM modifies its own workspace',()=>{
+  assert.match(server,/NodeGLM is a self-hosted development environment/);
+  assert.match(server,/application running this conversation/);
+  assert.match(server,/inspect, modify, and test that workspace/);
+});
+
 test('Chat Box treats the Bash cwd as authoritative command context',()=>{
   assert.match(server,/\[cwd: \.\.\.\] marker on the latest message is the authoritative current directory shared with the Bash panel/);
   assert.match(server,/If the user enters a shell command such as cd, pwd, or ls, execute it with TOOL:bash/);
@@ -106,6 +114,41 @@ test('chat supports cancellation and health checks inference readiness',()=>{
   assert.match(server,/GLM_HISTORY_MESSAGES/);
 });
 
+test('slow chat requests show JSON-configured progress and elapsed time',()=>{
+  assert.equal(typeof uiConfig.requestProgressDelaySeconds,'number');
+  assert.ok(uiConfig.requestProgressDelaySeconds>=0);
+  assert.match(server,/app\.get\('\/ui-config\.json'/);
+  assert.match(html,/fetch\(`\$\{API\}\/ui-config\.json`\)/);
+  assert.match(html,/function RequestProgress/);
+  assert.match(html,/elapsedMs < delaySeconds \* 1000/);
+  assert.match(html,/request-spinner/);
+  assert.match(html,/request-progress-bar/);
+  assert.match(html,/\(elapsedMs \/ 1000\)\.toFixed\(1\)/);
+  assert.match(html,/requestPending:false/);
+});
+
+test('request progress timer starts with the request and always cleans up',()=>{
+  assert.match(html,/const startedAt=Date\.now\(\)/);
+  assert.match(html,/startedAt,requestPending:true/);
+  assert.match(html,/const timer = setInterval\(tick, 100\)/);
+  assert.match(html,/return \(\) => clearInterval\(timer\)/);
+  assert.match(html,/finally\{[\s\S]*?requestPending:false/);
+  assert.match(html,/abortRef\.current===controller/);
+});
+
+test('request progress ignores invalid remote thresholds and retains its fallback',()=>{
+  assert.match(html,/useState\(3\)/);
+  assert.match(html,/Number\.isFinite\(seconds\)&&seconds>=0/);
+  assert.match(html,/setProgressDelaySeconds\(seconds\)/);
+  assert.match(html,/\.catch\(error => console\.error\('Failed to load UI config:'/);
+});
+
+test('request progress is accessible and respects reduced motion preferences',()=>{
+  assert.match(html,/className="request-progress" role="status" aria-live="polite"/);
+  assert.match(html,/className="request-spinner" aria-hidden="true"/);
+  assert.match(html,/@media \(prefers-reduced-motion: reduce\)/);
+});
+
 test('three-column workspace fills the React root without collapsing side panels',()=>{
   assert.match(html,/#root\s*\{[^}]*height:\s*100%[^}]*display:\s*flex/s);
   assert.match(html,/\.workspace\s*\{[^}]*min-width:\s*0[^}]*overflow:\s*hidden/s);
@@ -113,8 +156,14 @@ test('three-column workspace fills the React root without collapsing side panels
   assert.match(html,/\.right\s*\{[^}]*flex-shrink:\s*0[^}]*min-width:\s*320px/s);
 });
 
-test('./s is a thin launcher',()=>{
+test('./s starts the server and schedules its self-hosted app window',()=>{
   assert.match(launcher,/exec npm start/);
+  assert.match(launcher,/SAFE_ROOT="\$\{SAFE_ROOT:-\$SCRIPT_DIR\}"/);
+  assert.match(launcher,/Scripts\/open-app-window\.sh/);
+  assert.match(windowLauncher,/api\/health/);
+  assert.match(windowLauncher,/--app=\$URL/);
+  assert.match(windowLauncher,/NODEGLM_NO_WINDOW/);
+  assert.match(windowLauncher,/NODEGLM_BROWSER/);
   assert.doesNotMatch(launcher,/cat >|TOOL:|new WebSocketServer|editor\.setTheme/);
 });
 

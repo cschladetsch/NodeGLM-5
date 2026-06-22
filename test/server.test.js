@@ -6,7 +6,7 @@ const path = require('node:path');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'glm-code-test-'));
 process.env.SAFE_ROOT = root;
-const {app, safe, validSessionId, selectSessionModel} = require('../server');
+const {app, safe, validSessionId, selectSessionModel, readUiConfig} = require('../server');
 
 test.after(() => {
   fs.rmSync(root, {recursive:true, force:true});
@@ -57,6 +57,40 @@ test('chat rejects malformed messages before proxying', async () => {
   const response = await invoke('post','/api/chat',{messages:[]});
   assert.equal(response.statusCode, 400);
   assert.match(response.body.error, /non-empty/);
+});
+
+test('UI config endpoint returns the validated request progress threshold', async () => {
+  const response=await invoke('get','/ui-config.json');
+  assert.equal(response.statusCode,200);
+  assert.deepEqual(response.body,readUiConfig());
+  assert.equal(typeof response.body.requestProgressDelaySeconds,'number');
+});
+
+test('UI config accepts zero and fractional progress delays', () => {
+  for(const delay of [0,0.25,30]){
+    const configPath=path.join(root,`ui-config-${delay}.json`);
+    fs.writeFileSync(configPath,JSON.stringify({requestProgressDelaySeconds:delay}));
+    assert.equal(readUiConfig(configPath).requestProgressDelaySeconds,delay);
+  }
+});
+
+test('UI config rejects missing, non-numeric, negative, and non-finite delays', () => {
+  const invalid=[{}, {requestProgressDelaySeconds:'3'}, {requestProgressDelaySeconds:-1},
+    {requestProgressDelaySeconds:null}];
+  invalid.forEach((config,index)=>{
+    const configPath=path.join(root,`invalid-ui-config-${index}.json`);
+    fs.writeFileSync(configPath,JSON.stringify(config));
+    assert.throws(()=>readUiConfig(configPath),/non-negative finite number/);
+  });
+  const nonFinitePath=path.join(root,'non-finite-ui-config.json');
+  fs.writeFileSync(nonFinitePath,'{"requestProgressDelaySeconds":1e999}');
+  assert.throws(()=>readUiConfig(nonFinitePath),/non-negative finite number/);
+});
+
+test('UI config reports malformed JSON', () => {
+  const configPath=path.join(root,'malformed-ui-config.json');
+  fs.writeFileSync(configPath,'{"requestProgressDelaySeconds":');
+  assert.throws(()=>readUiConfig(configPath),SyntaxError);
 });
 
 test('API rejects malformed session identifiers', async () => {

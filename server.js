@@ -15,6 +15,15 @@ const KAI_DIR=process.env.KAI_DIR    ||path.join(__dirname,'Ext/CppKAI');
 const ENET_DIR=process.env.ENET_DIR  ||path.join(__dirname,'Ext/ENet');
 const KAI_CONSOLE=process.env.KAI_CONSOLE||path.join(KAI_DIR,'Bin/Console');
 
+function readUiConfig(configPath=path.join(__dirname,'ui-config.json')){
+  const config=JSON.parse(fs.readFileSync(configPath,'utf8'));
+  if(typeof config.requestProgressDelaySeconds!=='number'||
+      !Number.isFinite(config.requestProgressDelaySeconds)||config.requestProgressDelaySeconds<0)
+    throw new Error('requestProgressDelaySeconds must be a non-negative finite number');
+  return config;
+}
+const UI_CONFIG=readUiConfig();
+
 const app=express();
 const allowedOrigins=new Set((process.env.GLM_ALLOWED_ORIGINS||
   `http://localhost:${PORT},http://127.0.0.1:${PORT},null`).split(',').map(value=>value.trim()));
@@ -32,6 +41,7 @@ app.use('/api',(req,res,next)=>{
 });
 
 app.get(['/', '/index.html'],(_req,res)=>res.sendFile(path.join(__dirname,'index.html')));
+app.get('/ui-config.json',(_req,res)=>res.json(UI_CONFIG));
 
 // Sessions: cwd tracked per SID
 const sessions=new Map();
@@ -104,6 +114,8 @@ app.get('/api/modelstore',(_req,res)=>{
 const SYSTEM=`You are GLM-Code, a helpful, precise, and expert conversational software engineering assistant.
 You answer questions, explain code, and provide clear guidance on software development.
 When writing code, explain your design and provide complete, functional code blocks using standard markdown code fences (e.g. \`\`\`javascript).
+
+NodeGLM is a self-hosted development environment: the project visible in the current workspace is the application running this conversation. Treat requests to improve "this project" or "your interface" as requests to inspect, modify, and test that workspace rather than as abstract advice.
 
 Answer ordinary conversation and stable general-knowledge questions directly when you know the answer confidently. Use a network-capable tool when the user asks for a lookup, the information may have changed, or verification would materially improve the answer. Do not reach for a tool merely because a factual question was asked.
 
@@ -571,4 +583,4 @@ if(require.main===module){
   server.listen(PORT,HOST,()=>console.log(`  glm-code http://${HOST}:${PORT}  model=${DEFAULT_MODEL}  root=${ROOT}`));
 }
 
-module.exports={app,server,safe,validSessionId,selectSessionModel};
+module.exports={app,server,safe,validSessionId,selectSessionModel,readUiConfig};

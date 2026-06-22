@@ -58,15 +58,19 @@ git submodule update --init --recursive
 
 The launcher creates the configured model-cache directories, starts a local
 Ollama server when necessary, checks that the selected Ollama model is installed,
-stops an existing `node server.js` process, and then runs the application:
+stops an existing `node server.js` process, and then runs the application. It
+opens the UI in a standalone browser window when the server becomes ready and
+uses this repository as the default workspace, allowing NodeGLM to inspect and
+modify its own implementation:
 
 ```bash
 ./s
 ```
 
-Open <http://localhost:3001/>. The page may also be opened directly from
-`index.html`; the server must still be running and the default CORS policy must
-allow the resulting `null` origin.
+Set `NODEGLM_NO_WINDOW=1` to disable automatic window creation, or set
+`NODEGLM_BROWSER` to a browser executable that supports `--app`. The page may
+also be opened directly from `index.html`; the server must still be running and
+the default CORS policy must allow the resulting `null` origin.
 
 To run without the launcher:
 
@@ -177,6 +181,10 @@ ancestor so a symlink cannot be used to escape `SAFE_ROOT`.
 user and are not sandboxed, even when launched through the approval flow.
 
 ## Configuration
+
+Browser-only settings live in `ui-config.json`. Set
+`requestProgressDelaySeconds` to the number of seconds a chat request may run
+before its spinner, progress bar, and elapsed timer appear.
 
 | Variable | Default | Purpose |
 |---|---|---|
