@@ -92,11 +92,13 @@ test('RAM summary reports system and app memory in MiB', () => {
 });
 
 test('memory extraction captures explicit user facts', () => {
-  const facts=extractMemoryFacts('My name is Christian. My favorite editor is Vim. Remember that I prefer direct answers.');
+  const facts=extractMemoryFacts("My name is Christian. I am 54 years old. My cat's name is Raffy. My favorite editor is Vim. Remember that I prefer direct answers.");
   assert.deepEqual(facts,[
     'I prefer direct answers',
+    "The user's cat's name is Raffy",
     "The user's name is Christian",
     "The user's favorite editor is Vim",
+    'The user is 54 years old',
   ]);
 });
 
@@ -111,6 +113,9 @@ test('session memory deduplicates facts and builds a prompt block', () => {
 test('memory endpoint reports and clears session facts', async () => {
   const before=await invoke('get','/api/memory',{}, {sid:'memory'});
   assert.deepEqual(before.body.memory,[]);
+  const updated=await invoke('put','/api/memory',{sid:'memory',memory:[' Christian ', '', 'The user likes Vim.']});
+  assert.equal(updated.body.ok,true);
+  assert.deepEqual(updated.body.memory,['Christian','The user likes Vim']);
   const cleared=await invoke('post','/api/memory/clear',{sid:'memory'});
   assert.equal(cleared.body.ok,true);
   assert.deepEqual(cleared.body.memory,[]);

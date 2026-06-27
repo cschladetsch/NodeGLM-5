@@ -407,6 +407,64 @@
   }
   .chat-memory-clear:hover:not(:disabled) { color: var(--warn); }
   .chat-memory-clear:disabled { cursor: default; opacity: .45; }
+  .chat-memory-link {
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    cursor: pointer;
+    padding: 0;
+  }
+  .chat-memory-link:hover:not(:disabled) { color: var(--accent); }
+  .chat-memory-link:disabled { cursor: default; opacity: .45; }
+  .memory-editor-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 30;
+    background: rgba(5,5,8,.72);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .memory-editor {
+    width: min(720px, 100%);
+    height: min(520px, calc(100vh - 48px));
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 18px 50px rgba(0,0,0,.45);
+    overflow: hidden;
+  }
+  .memory-editor-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    border-bottom: 1px solid var(--border);
+    font: 11px var(--mono);
+    color: var(--muted);
+    flex-shrink: 0;
+  }
+  .memory-editor-head strong { color: var(--accent); font-size: 12px; }
+  .memory-editor-body {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+  }
+  .memory-editor-ace {
+    position: absolute;
+    inset: 0;
+  }
+  .memory-editor-status {
+    min-width: 110px;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .chat-input-files {
     display: flex;
     flex-wrap: wrap;
@@ -717,7 +775,7 @@
 <div id="root"></div>
 
 <script type="text/babel">
-const { useState, useEffect, useRef, useCallback } = React;
+const { useState, useEffect, useLayoutEffect, useRef, useCallback } = React;
 
 // Prefer the server that delivered the UI. Retain direct file:// support for
 // local use, where there is no page origin to target.
@@ -755,6 +813,8 @@ function saveChatMemory(messages) {
 function chatErrorMessage(error) {
   if(/unable to allocate CUDA|failed to load model/i.test(error.message))
     return 'The selected model could not allocate enough GPU memory. Close other GPU-heavy apps, restart Ollama through ./s so the low-memory settings apply, or choose a smaller model from the header; your conversation is saved.';
+  if(/ECONNREFUSED.*127\.0\.0\.1:11434|fetch failed/i.test(error.message))
+    return 'Ollama is not accepting connections at 127.0.0.1:11434. Start Ollama, or restart NodeGLM through ./s so the local model service is available; your conversation is saved.';
   return error.name==='AbortError'?'Generation stopped.':`Error: ${error.message}`;
 }
 
@@ -1452,6 +1512,130 @@ function RequestProgress({ startedAt, delaySeconds }) {
   );
 }
 
+function MemoryFactsEditor({open,initialFacts=[],onClose,onSaved}) {
+  const [text,setText] = useState('');
+  const [loading,setLoading] = useState(false);
+  const [saving,setSaving] = useState(false);
+  const [error,setError] = useState('');
+  const [notice,setNotice] = useState('');
+  const editorEl = useRef(null);
+  const aceRef = useRef(null);
+  const suppressChange = useRef(false);
+  const saveRef = useRef(null);
+
+  const factsFromText = value => String(value||'')
+    .split('\n')
+    .map(line => line.replace(/^\s*(?:[-*]\s+|\d+[.)]\s+)/,'').trim())
+    .filter(Boolean);
+
+  useEffect(() => {
+    if(!open)return;
+    const fallbackFacts=Array.isArray(initialFacts) ? initialFacts : [];
+    setText(fallbackFacts.join('\n'));
+    setLoading(true); setSaving(false); setError(''); setNotice('');
+    fetch(`${API}/api/memory?sid=${encodeURIComponent(SID)}`)
+      .then(response => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+      .then(data => {
+        const loaded=Array.isArray(data.memory) ? data.memory : [];
+        setText(loaded.length ? loaded.join('\n') : fallbackFacts.join('\n'));
+        onSaved?.(loaded.length ? loaded : fallbackFacts);
+      })
+      .catch(error => setError(error.message))
+      .finally(() => setLoading(false));
+  }, [open]);
+
+  const save = async () => {
+    if(saving)return;
+    const editor=aceRef.current;
+    const memory=factsFromText(editor ? editor.getValue() : text);
+    setSaving(true); setError(''); setNotice('');
+    try{
+      const response=await fetch(`${API}/api/memory`,{
+        method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({sid:SID,memory}),
+      });
+      const result=await response.json();
+      if(!response.ok||result.error)throw new Error(result.error||`HTTP ${response.status}`);
+      const saved=Array.isArray(result.memory) ? result.memory : [];
+      const nextText=saved.join('\n');
+      setText(nextText); setNotice('Saved'); onSaved?.(saved);
+      if(editor&&editor.getValue()!==nextText){
+        suppressChange.current=true;
+        editor.setValue(nextText,-1);
+        editor.clearSelection();
+        suppressChange.current=false;
+      }
+    }catch(error){
+      setError(error.message);
+    }finally{
+      setSaving(false);
+    }
+  };
+  saveRef.current=save;
+
+  useLayoutEffect(() => {
+    if(!open){
+      aceRef.current?.destroy();
+      aceRef.current=null;
+      return;
+    }
+    if(!editorEl.current)return;
+    let editor=aceRef.current;
+    if(editor&&editor.container!==editorEl.current){
+      editor.destroy();
+      aceRef.current=null;
+      editor=null;
+    }
+    if(!editor){
+      editor=ace.edit(editorEl.current);
+      aceRef.current=editor;
+      editor.setTheme('ace/theme/monokai');
+      editor.setKeyboardHandler('ace/keyboard/vim');
+      editor.setOptions({fontSize:'13px',showPrintMargin:false,useWorker:false});
+      editor.session.setMode('ace/mode/text');
+      editor.session.on('change',()=>{if(!suppressChange.current){setText(editor.getValue());setNotice('');}});
+      editor.commands.addCommand({name:'saveMemoryFacts',bindKey:{win:'Ctrl-S',mac:'Command-S'},exec:()=>saveRef.current?.()});
+    }
+    if(editor.getValue()!==text){
+      suppressChange.current=true;
+      editor.setValue(text,-1);
+      editor.clearSelection();
+      suppressChange.current=false;
+    }
+    editor.setOptions({readOnly:saving});
+    requestAnimationFrame(()=>{
+      editor.resize(true);
+      editor.renderer.updateFull();
+      editor.focus();
+    });
+  }, [open,loading,text,saving]);
+
+  useEffect(() => () => { aceRef.current?.destroy(); aceRef.current=null; }, []);
+
+  if(!open)return null;
+  const count=factsFromText(text).length;
+  return (
+    <div className="memory-editor-backdrop" role="dialog" aria-modal="true" aria-label="Stored facts editor">
+      <div className="memory-editor">
+        <div className="memory-editor-head">
+          <strong>Stored Facts</strong>
+          <span>Vim · one fact per line</span>
+          <span style={{flex:1}}>{count} fact{count===1?'':'s'}</span>
+          {error && <span className="memory-editor-status" style={{color:'var(--warn)'}}>{error}</span>}
+          {notice && <span className="memory-editor-status" style={{color:'var(--accent2)'}}>{notice}</span>}
+          <button className="btn btn-primary" style={{fontSize:11,padding:'4px 10px'}}
+            onClick={save} disabled={loading||saving}>{saving?'Saving...':'Save'}</button>
+          <button className="btn btn-ghost" style={{fontSize:11,padding:'4px 10px'}}
+            onClick={onClose} disabled={saving}>Close</button>
+        </div>
+        <div className="memory-editor-body">
+          <div ref={editorEl} className="memory-editor-ace"/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
   const [messages, setMessages] = useState(loadChatMemory);
   const [input, setInput] = useState('');
@@ -1460,6 +1644,7 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
   const [pendingAction, setPendingAction] = useState(null);
   const [progressDelaySeconds, setProgressDelaySeconds] = useState(3);
   const [memoryFacts, setMemoryFacts] = useState([]);
+  const [memoryEditorOpen, setMemoryEditorOpen] = useState(false);
   const messagesEndRef = useRef(null);
   const taRef = useRef(null);
   const abortRef = useRef(null);
@@ -1733,6 +1918,12 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
 
   return (
     <div className="main">
+      <MemoryFactsEditor
+        open={memoryEditorOpen}
+        initialFacts={memoryFacts}
+        onClose={()=>setMemoryEditorOpen(false)}
+        onSaved={setMemoryFacts}
+      />
       <div className="chat-messages">
         {messages.map((msg, i) => (
           <div key={msg.id||i} className={`msg ${msg.role}`}>
@@ -1791,7 +1982,11 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
 
       <div className="chat-input-area">
         <div className="chat-memory-bar">
-          <span>Memory: {messages.length} message{messages.length===1?'':'s'}, {memoryFacts.length} fact{memoryFacts.length===1?'':'s'}</span>
+          <span>Memory: {messages.length} message{messages.length===1?'':'s'}, </span>
+          <button className="chat-memory-link" onClick={()=>setMemoryEditorOpen(true)}
+            disabled={streaming||Boolean(pendingAction)}>
+            {memoryFacts.length} fact{memoryFacts.length===1?'':'s'}
+          </button>
           <button className="chat-memory-clear" onClick={clearMemory}
             disabled={streaming||Boolean(pendingAction)}>Clear memory</button>
         </div>

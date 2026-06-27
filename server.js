@@ -187,15 +187,19 @@ function extractMemoryFacts(text){
   const patterns=[
     /\b(?:please\s+)?remember(?:\s+that)?\s+([^.!?\n]{3,180})/gi,
     /\b(?:my name is|call me)\s+([A-Za-z][^.!?,;\n]{0,59})/g,
+    /\bmy\s+([a-z][a-z0-9 _-]{1,40})'s\s+name\s+is\s+([^.!?,;\n]{1,80})/gi,
     /\bmy\s+([a-z][a-z0-9 _-]{1,40})\s+is\s+([^.!?\n]{1,120})/gi,
+    /\bi\s+(?:am|'m)\s+(\d{1,3})\s+years?\s+old\b/gi,
     /\bi\s+(?:am|'m)\s+(?:based in|located in|from)\s+([^.!?\n]{2,120})/gi,
   ];
   for(const pattern of patterns){
     let match;
     while((match=pattern.exec(source))){
       if(patterns.indexOf(pattern)===1)add(`The user's name is ${match[1]}`);
-      else if(patterns.indexOf(pattern)===2)add(`The user's ${match[1].trim()} is ${match[2].trim()}`);
-      else if(patterns.indexOf(pattern)===3)add(`The user is based in ${match[1]}`);
+      else if(patterns.indexOf(pattern)===2)add(`The user's ${match[1].trim()}'s name is ${match[2].trim()}`);
+      else if(patterns.indexOf(pattern)===3)add(`The user's ${match[1].trim()} is ${match[2].trim()}`);
+      else if(patterns.indexOf(pattern)===4)add(`The user is ${match[1]} years old`);
+      else if(patterns.indexOf(pattern)===5)add(`The user is based in ${match[1]}`);
       else add(match[1]);
     }
   }
@@ -459,7 +463,18 @@ app.get('/api/session',(req,res)=>{
 
 app.get('/api/memory',(req,res)=>{
   const s=sess(req.query.sid||'default');
+  s.memory=readStoredMemory();
+  setAllSessionMemory(s.memory);
   res.json({memory:s.memory});
+});
+
+app.put('/api/memory',(req,res)=>{
+  const s=sess(req.body.sid||'default');
+  if(!Array.isArray(req.body.memory))
+    return res.status(400).json({error:'memory must be an array'});
+  s.memory=writeStoredMemory(req.body.memory);
+  setAllSessionMemory(s.memory);
+  res.json({ok:true,memory:s.memory});
 });
 
 app.post('/api/memory/clear',(req,res)=>{

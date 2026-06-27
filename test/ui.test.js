@@ -131,6 +131,11 @@ test('CUDA allocation failures provide a usable low-memory recovery path',()=>{
   assert.match(launcher,/Ollama already running; launcher memory settings only apply after restarting Ollama/);
 });
 
+test('Ollama connection failures explain that the backend is unavailable',()=>{
+  assert.match(html,/Ollama is not accepting connections at 127\.0\.0\.1:11434/);
+  assert.match(html,/your conversation is saved/);
+});
+
 test('chat exposes a guarded clear-memory control',()=>{
   assert.match(html,/Clear saved conversation memory\?/);
   assert.match(html,/localStorage\.removeItem\(CHAT_MEMORY_KEY\)/);
@@ -141,10 +146,21 @@ test('chat exposes a guarded clear-memory control',()=>{
 
 test('chat displays and refreshes learned fact memory',()=>{
   assert.match(html,/const \[memoryFacts, setMemoryFacts\] = useState\(\[\]\)/);
+  assert.match(html,/const \[memoryEditorOpen, setMemoryEditorOpen\] = useState\(false\)/);
   assert.match(html,/api\/memory\?sid=/);
+  assert.match(html,/method:'PUT'/);
+  assert.match(html,/Stored Facts/);
+  assert.match(html,/Vim · one fact per line/);
+  assert.match(html,/className="chat-memory-link"/);
+  assert.match(html,/initialFacts=\{memoryFacts\}/);
+  assert.match(html,/fallbackFacts\.join\('\\n'\)/);
   assert.match(html,/loadMemoryFacts\(\)/);
   assert.match(html,/memoryFacts\.length/);
+  assert.match(html,/if\(!open\)\{[\s\S]*?aceRef\.current\?\.destroy\(\)/);
+  assert.match(html,/editor&&editor\.container!==editorEl\.current/);
   assert.match(server,/extractMemoryFacts/);
+  assert.match(server,/app\.put\('\/api\/memory'/);
+  assert.match(server,/years\?\\s\+old/);
   assert.match(server,/Known user facts from earlier messages/);
   assert.match(server,/messages:\[\.\.\.systemMessages,\.\.\.augmented\]/);
 });
