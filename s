@@ -11,7 +11,7 @@ APP_URL="${NODEGLM_URL:-http://${HOST:-127.0.0.1}:${PORT:-3001}/}"
 MODEL_CACHE_ROOT="${MODEL_CACHE_ROOT:-$HOME/.models}"
 OLLAMA_MODELS="${OLLAMA_MODELS:-$MODEL_CACHE_ROOT/ollama}"
 HF_HOME="${HF_HOME:-$MODEL_CACHE_ROOT/hf}"
-OLLAMA_CONTEXT_LENGTH="${OLLAMA_CONTEXT_LENGTH:-4096}"
+OLLAMA_CONTEXT_LENGTH="${OLLAMA_CONTEXT_LENGTH:-2048}"
 OLLAMA_KV_CACHE_TYPE="${OLLAMA_KV_CACHE_TYPE:-q8_0}"
 OLLAMA_FLASH_ATTENTION="${OLLAMA_FLASH_ATTENTION:-1}"
 OLLAMA_MAX_LOADED_MODELS="${OLLAMA_MAX_LOADED_MODELS:-1}"
@@ -45,6 +45,8 @@ ensure_ollama() {
       fi
       sleep 1
     done
+  else
+    echo "Ollama already running; launcher memory settings only apply after restarting Ollama."
   fi
 
   if ! curl --silent --fail --max-time 2 "$OLLAMA_BASE/api/version" >/dev/null; then

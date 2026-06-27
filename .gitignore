@@ -1,1 +1,3 @@
 node_modules/
+Logs/
+.nodeglm-memory.json

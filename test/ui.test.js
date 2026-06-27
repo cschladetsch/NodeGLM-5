@@ -63,6 +63,30 @@ test('header selects among models installed in the active endpoint',()=>{
   assert.match(server,/model:s\.model/);
 });
 
+test('header displays app and overall VRAM usage',()=>{
+  assert.match(html,/className="resource-badge vram-badge"/);
+  assert.match(html,/api\/resources/);
+  assert.match(html,/All GPUs/);
+  assert.match(html,/used of/);
+  assert.match(html,/for this app/);
+  assert.match(html,/formatMiB/);
+  assert.match(server,/app\.get\('\/api\/resources'/);
+  assert.doesNotMatch(server,/app\.get\('\/api\/vram'/);
+  assert.match(server,/--query-gpu=uuid,index,name,memory\.used,memory\.total/);
+  assert.match(server,/--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory/);
+  assert.match(server,/NodeGLM process tree plus local Ollama/);
+});
+
+test('header displays system RAM usage',()=>{
+  assert.match(html,/className="resource-badge ram-badge"/);
+  assert.match(html,/RAM:/);
+  assert.match(html,/ramLabel/);
+  assert.match(html,/ramTitle/);
+  assert.match(server,/function queryRam/);
+  assert.match(server,/os\.totalmem\(\)/);
+  assert.match(server,/process\.memoryUsage\(\)\.rss/);
+});
+
 test('main chat panel is a plain chat surface',()=>{
   assert.match(html,/chat-input-area/);
   assert.match(html,/placeholder="Message…"/);
@@ -95,21 +119,34 @@ test('chat errors replace the active placeholder instead of adding a blank messa
 
 test('CUDA allocation failures provide a usable low-memory recovery path',()=>{
   assert.match(html,/unable to allocate CUDA\|failed to load model/);
-  assert.match(html,/Choose a smaller model from the header/);
+  assert.match(html,/restart Ollama through \.\/s/);
+  assert.match(html,/choose a smaller model from the header/);
   assert.match(html,/your conversation is saved/);
   assert.match(launcher,/GLM_MODEL="\$\{GLM_MODEL:-qwen2\.5-coder:7b\}"/);
-  assert.match(launcher,/OLLAMA_CONTEXT_LENGTH="\$\{OLLAMA_CONTEXT_LENGTH:-4096\}"/);
+  assert.match(launcher,/OLLAMA_CONTEXT_LENGTH="\$\{OLLAMA_CONTEXT_LENGTH:-2048\}"/);
   assert.match(launcher,/OLLAMA_KV_CACHE_TYPE="\$\{OLLAMA_KV_CACHE_TYPE:-q8_0\}"/);
   assert.match(launcher,/OLLAMA_GPU_OVERHEAD="\$\{OLLAMA_GPU_OVERHEAD:-1073741824\}"/);
   assert.match(launcher,/OLLAMA_MAX_LOADED_MODELS="\$\{OLLAMA_MAX_LOADED_MODELS:-1\}"/);
   assert.match(launcher,/OLLAMA_NUM_PARALLEL="\$\{OLLAMA_NUM_PARALLEL:-1\}"/);
+  assert.match(launcher,/Ollama already running; launcher memory settings only apply after restarting Ollama/);
 });
 
 test('chat exposes a guarded clear-memory control',()=>{
   assert.match(html,/Clear saved conversation memory\?/);
   assert.match(html,/localStorage\.removeItem\(CHAT_MEMORY_KEY\)/);
+  assert.match(html,/api\/memory\/clear/);
   assert.match(html,/>Clear memory<\/button>/);
   assert.match(html,/disabled=\{streaming\|\|Boolean\(pendingAction\)\}/);
+});
+
+test('chat displays and refreshes learned fact memory',()=>{
+  assert.match(html,/const \[memoryFacts, setMemoryFacts\] = useState\(\[\]\)/);
+  assert.match(html,/api\/memory\?sid=/);
+  assert.match(html,/loadMemoryFacts\(\)/);
+  assert.match(html,/memoryFacts\.length/);
+  assert.match(server,/extractMemoryFacts/);
+  assert.match(server,/Known user facts from earlier messages/);
+  assert.match(server,/messages:\[\.\.\.systemMessages,\.\.\.augmented\]/);
 });
 
 test('chat executes bounded tools and requires write approval',()=>{
@@ -151,8 +188,12 @@ test('chat supports cancellation and health checks inference readiness',()=>{
   assert.match(server,/new URL\('\/v1\/models',OLLAMA\)/);
   assert.match(server,/res\.on\('close'/);
   assert.match(server,/GLM_TIMEOUT_MS/);
+  assert.match(server,/GLM_FIRST_BYTE_TIMEOUT_MS/);
   assert.match(server,/GLM_MAX_TOKENS/);
   assert.match(server,/GLM_HISTORY_MESSAGES/);
+  assert.match(server,/Model did not start streaming within/);
+  assert.match(server,/may still be loading or may be too large/);
+  assert.match(server,/closed without streaming a response/);
 });
 
 test('slow chat requests show JSON-configured progress and elapsed time',()=>{
@@ -175,6 +216,8 @@ test('request progress timer starts with the request and always cleans up',()=>{
   assert.match(html,/return \(\) => clearInterval\(timer\)/);
   assert.match(html,/finally\{[\s\S]*?requestPending:false/);
   assert.match(html,/abortRef\.current===controller/);
+  assert.match(html,/sawAssistantDelta/);
+  assert.match(html,/Model stream ended without assistant content/);
 });
 
 test('request progress ignores invalid remote thresholds and retains its fallback',()=>{

@@ -91,6 +91,22 @@
   .header-dot.online  { background: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
   .header-dot.error   { background: var(--warn); }
   .header-status { font-size: 11px; color: var(--muted); }
+  .usage-badges {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+  }
+  .resource-badge {
+    font: 11px var(--mono);
+    color: var(--muted);
+    background: var(--raised);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 7px;
+    white-space: nowrap;
+  }
+  .resource-badge strong { color: var(--text); font-weight: 600; }
 
   /* ── tabs ── */
   .tabs {
@@ -738,8 +754,41 @@ function saveChatMemory(messages) {
 
 function chatErrorMessage(error) {
   if(/unable to allocate CUDA|failed to load model/i.test(error.message))
-    return 'The selected model does not fit in available GPU memory. Choose a smaller model from the header; your conversation is saved.';
+    return 'The selected model could not allocate enough GPU memory. Close other GPU-heavy apps, restart Ollama through ./s so the low-memory settings apply, or choose a smaller model from the header; your conversation is saved.';
   return error.name==='AbortError'?'Generation stopped.':`Error: ${error.message}`;
+}
+
+function formatMiB(value) {
+  const mib=Number(value)||0;
+  return mib>=1024 ? `${(mib/1024).toFixed(1)}G` : `${Math.round(mib)}M`;
+}
+
+function vramLabel(vram) {
+  if(!vram?.available)return 'VRAM n/a';
+  const gpuName=(vram.gpus?.length===1&&vram.gpus[0]?.name) ? vram.gpus[0].name : 'All GPUs';
+  const total=vram.total||{};
+  return `${gpuName}: ${formatMiB(total.usedMiB)} used of ${formatMiB(total.totalMiB)} total, ${formatMiB(total.appUsedMiB)} for this app`;
+}
+
+function vramTitle(vram) {
+  if(!vram?.available)return vram?.error ? `VRAM unavailable: ${vram.error}` : 'VRAM unavailable';
+  const total=vram.total||{};
+  const gpu=(vram.gpus||[]).map(item =>
+    `GPU ${item.index}: ${item.name} ${formatMiB(item.usedMiB)} / ${formatMiB(item.totalMiB)}`
+  ).join('\n');
+  return `${vram.appScope}\nApp: ${formatMiB(total.appUsedMiB)}\nOverall: ${formatMiB(total.usedMiB)} / ${formatMiB(total.totalMiB)}${gpu?`\n${gpu}`:''}`;
+}
+
+function ramLabel(ram) {
+  if(!ram?.available)return 'RAM n/a';
+  const total=ram.total||{};
+  return `RAM: ${formatMiB(total.usedMiB)} used of ${formatMiB(total.totalMiB)} total, ${formatMiB(total.appUsedMiB)} for this app`;
+}
+
+function ramTitle(ram) {
+  if(!ram?.available)return ram?.error ? `RAM unavailable: ${ram.error}` : 'RAM unavailable';
+  const total=ram.total||{};
+  return `System RAM\nApp: ${formatMiB(total.appUsedMiB)}\nOverall: ${formatMiB(total.usedMiB)} / ${formatMiB(total.totalMiB)}\nFree: ${formatMiB(total.freeMiB)}`;
 }
 
 function parseToolCall(text) {
@@ -1410,9 +1459,17 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
   const [attachedFiles, setAttachedFiles] = useState([]);
   const [pendingAction, setPendingAction] = useState(null);
   const [progressDelaySeconds, setProgressDelaySeconds] = useState(3);
+  const [memoryFacts, setMemoryFacts] = useState([]);
   const messagesEndRef = useRef(null);
   const taRef = useRef(null);
   const abortRef = useRef(null);
+
+  const loadMemoryFacts = useCallback(() => {
+    fetch(`${API}/api/memory?sid=${encodeURIComponent(SID)}`)
+      .then(response => response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`)))
+      .then(data => setMemoryFacts(Array.isArray(data.memory) ? data.memory : []))
+      .catch(error => console.error('Failed to load fact memory:', error));
+  }, []);
 
   useEffect(() => {
     fetch(`${API}/ui-config.json`)
@@ -1423,6 +1480,10 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
       })
       .catch(error => console.error('Failed to load UI config:', error));
   }, []);
+
+  useEffect(() => {
+    loadMemoryFacts();
+  }, [loadMemoryFacts]);
 
   useEffect(() => {
     if(!streaming&&!pendingAction)saveChatMemory(messages);
@@ -1467,10 +1528,11 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
         signal:controller.signal,
       });
       if(!res.ok)throw new Error((await res.json()).error||`HTTP ${res.status}`);
+      loadMemoryFacts();
 
       const reader=res.body.getReader();
       const dec=new TextDecoder();
-      let buf='',content='',thinking='';
+      let buf='',content='',thinking='',sawAssistantDelta=false;
       while(true){
         const {done,value}=await reader.read();
         if(done)break;
@@ -1486,9 +1548,11 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
           if(!delta)continue;
           content+=delta.content||'';
           thinking+=delta.reasoning_content||'';
+          sawAssistantDelta=sawAssistantDelta||Boolean(delta.content||delta.reasoning_content);
           updateMessage(id,{content,thinking});
         }
       }
+      if(!sawAssistantDelta)throw new Error('Model stream ended without assistant content');
       return {id,content};
     }catch(error){
       error.requestMessageId=id;
@@ -1650,10 +1714,21 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
     }
   };
 
-  const clearMemory = () => {
+  const clearMemory = async () => {
     if(!window.confirm('Clear saved conversation memory?'))return;
     localStorage.removeItem(CHAT_MEMORY_KEY);
     setMessages(INITIAL_CHAT_MESSAGES);
+    try {
+      const response=await fetch(`${API}/api/memory/clear`,{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({sid:SID}),
+      });
+      const result=await response.json();
+      if(!response.ok||result.error)throw new Error(result.error||`HTTP ${response.status}`);
+      setMemoryFacts([]);
+    } catch(error) {
+      console.error('Failed to clear fact memory:', error);
+    }
   };
 
   return (
@@ -1716,7 +1791,7 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
 
       <div className="chat-input-area">
         <div className="chat-memory-bar">
-          <span>Memory: {messages.length} message{messages.length===1?'':'s'}</span>
+          <span>Memory: {messages.length} message{messages.length===1?'':'s'}, {memoryFacts.length} fact{memoryFacts.length===1?'':'s'}</span>
           <button className="chat-memory-clear" onClick={clearMemory}
             disabled={streaming||Boolean(pendingAction)}>Clear memory</button>
         </div>
@@ -1764,6 +1839,8 @@ function App() {
   const [models, setModels]       = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [modelError, setModelError] = useState('');
+  const [vram, setVram] = useState(null);
+  const [ram, setRam] = useState(null);
 
   useEffect(() => {
     const check = () => {
@@ -1803,6 +1880,21 @@ function App() {
         if(next&&next!==body.selected)chooseModel(next);
       })
       .catch(error=>setModelError(error.message));
+  }, []);
+
+  useEffect(() => {
+    const check = () => {
+      fetch(`${API}/api/resources`)
+        .then(response => response.json())
+        .then(data => {setVram(data.vram);setRam(data.ram);})
+        .catch(error => {
+          setVram({available:false,error:error.message});
+          setRam({available:false,error:error.message});
+        });
+    };
+    check();
+    const timer=setInterval(check,5000);
+    return () => clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -1850,6 +1942,10 @@ function App() {
           {models.length===0 && <option value="">No models found</option>}
           {models.map(model=><option key={model} value={model}>{model}</option>)}
         </select>
+        <span className="usage-badges">
+          <span className="resource-badge vram-badge" title={vramTitle(vram)}><strong>{vramLabel(vram)}</strong></span>
+          <span className="resource-badge ram-badge" title={ramTitle(ram)}><strong>{ramLabel(ram)}</strong></span>
+        </span>
         <span className="header-dot" style={{background: status==='online'?'var(--accent2)': status==='error'?'var(--warn)':'#555', boxShadow: status==='online'?'0 0 6px var(--accent2)':undefined }}/>
         <span className="header-status">{status}</span>
         <span className="header-model" title={cwd}>{cwd || '~'}</span>

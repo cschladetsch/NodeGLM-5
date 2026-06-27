@@ -1,5 +1,5 @@
 const express=require('express'),cors=require('cors'),fs=require('fs'),path=require('path'),os=require('os'),http=require('http'),https=require('https'),crypto=require('crypto');
-const {exec,spawn}=require('child_process');
+const {exec,spawn,execFile}=require('child_process');
 const Diff=require('diff');
 
 const OLLAMA=process.env.GLM_BASE_URL||'http://localhost:11434';
@@ -8,12 +8,14 @@ const PORT  =process.env.PORT        ||3001;
 const HOST  =process.env.HOST        ||'127.0.0.1';
 const DEFAULT_MODEL=process.env.GLM_MODEL||'qwen2.5-coder:7b';
 const GLM_TIMEOUT_MS=Math.max(1000,Number(process.env.GLM_TIMEOUT_MS)||120000);
+const GLM_FIRST_BYTE_TIMEOUT_MS=Math.max(1000,Number(process.env.GLM_FIRST_BYTE_TIMEOUT_MS)||90000);
 const GLM_MAX_TOKENS=Math.max(256,Number(process.env.GLM_MAX_TOKENS)||4096);
 const GLM_HISTORY_MESSAGES=Math.max(4,Number(process.env.GLM_HISTORY_MESSAGES)||40);
 const MS_DIR=process.env.MS_DIR      ||path.join(os.homedir(),'local/repos/CppLmmModelStore');
 const KAI_DIR=process.env.KAI_DIR    ||path.join(__dirname,'Ext/CppKAI');
 const ENET_DIR=process.env.ENET_DIR  ||path.join(__dirname,'Ext/ENet');
 const KAI_CONSOLE=process.env.KAI_CONSOLE||path.join(KAI_DIR,'Bin/Console');
+const MEMORY_FILE=process.env.NODEGLM_MEMORY_FILE||path.join(ROOT,'.nodeglm-memory.json');
 
 function readUiConfig(configPath=path.join(__dirname,'ui-config.json')){
   const config=JSON.parse(fs.readFileSync(configPath,'utf8'));
@@ -43,7 +45,189 @@ app.use('/api',(req,res,next)=>{
 app.get(['/', '/index.html'],(_req,res)=>res.sendFile(path.join(__dirname,'index.html')));
 app.get('/ui-config.json',(_req,res)=>res.json(UI_CONFIG));
 
-// Sessions: cwd tracked per SID
+function csvColumns(line){
+  return String(line).split(',').map(value=>value.trim());
+}
+function parseMiB(value){
+  const match=String(value).match(/(\d+)/);
+  return match?Number(match[1]):0;
+}
+function parseGpuRows(text){
+  return String(text).trim().split('\n').filter(Boolean).map(line=>{
+    const [uuid,index,name,used,total]=csvColumns(line);
+    return {uuid,index:Number(index),name,usedMiB:parseMiB(used),totalMiB:parseMiB(total)};
+  });
+}
+function parseGpuProcessRows(text){
+  return String(text).trim().split('\n').filter(Boolean).map(line=>{
+    const [gpuUuid,pid,processName,used]=csvColumns(line);
+    return {gpuUuid,pid:Number(pid),processName,usedMiB:parseMiB(used)};
+  }).filter(row=>Number.isFinite(row.pid));
+}
+function processBaseName(processName){
+  return String(processName||'').split(/[\\/]/).pop();
+}
+function isLocalModelEndpoint(){
+  try{
+    const host=new URL(OLLAMA).hostname;
+    return ['localhost','127.0.0.1','::1'].includes(host);
+  }catch{return false;}
+}
+function execFileText(command,args,timeout=2000){
+  return new Promise((resolve,reject)=>{
+    execFile(command,args,{timeout,maxBuffer:1024*1024},(error,stdout)=>error?reject(error):resolve(stdout));
+  });
+}
+async function appGpuPids(){
+  try{
+    const rows=(await execFileText('ps',['-eo','pid=,ppid=,comm='])).trim().split('\n').filter(Boolean)
+      .map(line=>{
+        const parts=line.trim().split(/\s+/);
+        return {pid:Number(parts[0]),ppid:Number(parts[1]),comm:parts.slice(2).join(' ')};
+      }).filter(row=>Number.isFinite(row.pid)&&Number.isFinite(row.ppid));
+    const related=new Set([process.pid]);
+    let changed=true;
+    while(changed){
+      changed=false;
+      for(const row of rows)if(related.has(row.ppid)&&!related.has(row.pid)){
+        related.add(row.pid);changed=true;
+      }
+    }
+    return related;
+  }catch{return new Set([process.pid]);}
+}
+function summarizeVram(gpus,processes,relatedPids,includeLocalOllama){
+  const gpuByUuid=new Map(gpus.map(gpu=>[gpu.uuid,{...gpu,appUsedMiB:0}]));
+  for(const proc of processes){
+    const gpu=gpuByUuid.get(proc.gpuUuid);
+    if(!gpu)continue;
+    const name=processBaseName(proc.processName);
+    const belongsToApp=relatedPids.has(proc.pid)||(includeLocalOllama&&name==='ollama');
+    if(belongsToApp)gpu.appUsedMiB+=proc.usedMiB;
+  }
+  const rows=[...gpuByUuid.values()];
+  return {
+    available:true,
+    source:'nvidia-smi',
+    appScope:includeLocalOllama?'NodeGLM process tree plus local Ollama':'NodeGLM process tree',
+    gpus:rows,
+    total:rows.reduce((total,gpu)=>({
+      appUsedMiB:total.appUsedMiB+gpu.appUsedMiB,
+      usedMiB:total.usedMiB+gpu.usedMiB,
+      totalMiB:total.totalMiB+gpu.totalMiB,
+    }),{appUsedMiB:0,usedMiB:0,totalMiB:0}),
+  };
+}
+function bytesToMiB(value){
+  return Math.round(Number(value||0)/1024/1024);
+}
+function queryRam(){
+  const totalMiB=bytesToMiB(os.totalmem());
+  const freeMiB=bytesToMiB(os.freemem());
+  return {
+    available:true,
+    source:'node-os',
+    total:{
+      appUsedMiB:bytesToMiB(process.memoryUsage().rss),
+      usedMiB:Math.max(0,totalMiB-freeMiB),
+      totalMiB,
+      freeMiB,
+    },
+  };
+}
+async function queryVram(){
+  const gpuArgs=['--query-gpu=uuid,index,name,memory.used,memory.total','--format=csv,noheader,nounits'];
+  const appArgs=['--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory','--format=csv,noheader,nounits'];
+  try{
+    const [gpuText,appText,relatedPids]=await Promise.all([
+      execFileText('nvidia-smi',gpuArgs),
+      execFileText('nvidia-smi',appArgs).catch(()=>''), appGpuPids()
+    ]);
+    return summarizeVram(parseGpuRows(gpuText),parseGpuProcessRows(appText),relatedPids,isLocalModelEndpoint());
+  }catch(error){
+    return {available:false,source:'nvidia-smi',error:error.code==='ENOENT'?'nvidia-smi not found':error.message};
+  }
+}
+
+const MEMORY_FACT_LIMIT=50;
+const MEMORY_FACT_MAX_LENGTH=180;
+
+function normalizeMemoryFact(value){
+  return String(value||'')
+    .replace(/\s+/g,' ')
+    .replace(/^[\s:,-]+|[\s.!?]+$/g,'')
+    .trim()
+    .slice(0,MEMORY_FACT_MAX_LENGTH);
+}
+function readStoredMemory(){
+  try{
+    const parsed=JSON.parse(fs.readFileSync(MEMORY_FILE,'utf8'));
+    if(!Array.isArray(parsed))return [];
+    return parsed.map(normalizeMemoryFact).filter(Boolean).slice(-MEMORY_FACT_LIMIT);
+  }catch{return [];}
+}
+function writeStoredMemory(memory){
+  const stable=(Array.isArray(memory)?memory:[]).map(normalizeMemoryFact).filter(Boolean).slice(-MEMORY_FACT_LIMIT);
+  try{
+    fs.mkdirSync(path.dirname(MEMORY_FILE),{recursive:true});
+    fs.writeFileSync(MEMORY_FILE,JSON.stringify(stable,null,2),'utf8');
+  }catch(error){
+    console.error('Failed to save memory:',error.message);
+  }
+  return stable;
+}
+function extractMemoryFacts(text){
+  const source=String(text||'').replace(/<file[\s\S]*?<\/file>/g,' ');
+  const facts=[];
+  const add=fact=>{
+    const normalized=normalizeMemoryFact(fact);
+    if(normalized.length>=3&&!facts.some(item=>item.toLowerCase()===normalized.toLowerCase()))
+      facts.push(normalized);
+  };
+  const patterns=[
+    /\b(?:please\s+)?remember(?:\s+that)?\s+([^.!?\n]{3,180})/gi,
+    /\b(?:my name is|call me)\s+([A-Za-z][^.!?,;\n]{0,59})/g,
+    /\bmy\s+([a-z][a-z0-9 _-]{1,40})\s+is\s+([^.!?\n]{1,120})/gi,
+    /\bi\s+(?:am|'m)\s+(?:based in|located in|from)\s+([^.!?\n]{2,120})/gi,
+  ];
+  for(const pattern of patterns){
+    let match;
+    while((match=pattern.exec(source))){
+      if(patterns.indexOf(pattern)===1)add(`The user's name is ${match[1]}`);
+      else if(patterns.indexOf(pattern)===2)add(`The user's ${match[1].trim()} is ${match[2].trim()}`);
+      else if(patterns.indexOf(pattern)===3)add(`The user is based in ${match[1]}`);
+      else add(match[1]);
+    }
+  }
+  return facts;
+}
+function setAllSessionMemory(memory){
+  for(const session of sessions.values())session.memory=[...memory];
+}
+function addMemoryFacts(session,facts,persist=false){
+  session.memory=session.memory||[];
+  for(const fact of facts){
+    const normalized=normalizeMemoryFact(fact);
+    if(!normalized)continue;
+    const existing=session.memory.findIndex(item=>item.toLowerCase()===normalized.toLowerCase());
+    if(existing>=0)session.memory.splice(existing,1);
+    session.memory.push(normalized);
+  }
+  if(session.memory.length>MEMORY_FACT_LIMIT)
+    session.memory=session.memory.slice(-MEMORY_FACT_LIMIT);
+  if(persist){
+    session.memory=writeStoredMemory(session.memory);
+    setAllSessionMemory(session.memory);
+  }
+  return session.memory;
+}
+function memoryPrompt(session){
+  const memory=(session.memory||[]).filter(Boolean).slice(-MEMORY_FACT_LIMIT);
+  if(!memory.length)return null;
+  return `Known user facts from earlier messages:\n${memory.map(fact=>`- ${fact}`).join('\n')}\nUse these facts when relevant. Do not reveal this memory block unless asked.`;
+}
+
+// Sessions: cwd, model, and learned user facts tracked per SID
 const sessions=new Map();
 const SESSION_TTL=24*60*60*1000;
 function sess(sid){
@@ -56,9 +240,10 @@ function sess(sid){
       if(oldestKey!==undefined)sessions.delete(oldestKey);
     }
   }
-  if(!sessions.has(sid))sessions.set(sid,{cwd:ROOT,model:DEFAULT_MODEL,lastUsed:now});
+  if(!sessions.has(sid))sessions.set(sid,{cwd:ROOT,model:DEFAULT_MODEL,memory:readStoredMemory(),lastUsed:now});
   const session=sessions.get(sid);
   session.lastUsed=now;
+  session.memory=session.memory||[];
   return session;
 }
 
@@ -147,12 +332,16 @@ app.post('/api/chat',(req,res)=>{
   const last=messages[messages.length-1];
   if(!last||typeof last.content!=='string')
     return res.status(400).json({error:'last message must have string content'});
+  addMemoryFacts(s,extractMemoryFacts(last.content),true);
   const recent=messages.slice(-GLM_HISTORY_MESSAGES);
   const augmented=[...recent.slice(0,-1),
     {...last,content:last.content+`\n\n[cwd: ${s.cwd}]`}];
+  const systemMessages=[{role:'system',content:SYSTEM}];
+  const memory=memoryPrompt(s);
+  if(memory)systemMessages.push({role:'system',content:memory});
   const payload=JSON.stringify({
     model:s.model,
-    messages:[{role:'system',content:SYSTEM},...augmented],
+    messages:[...systemMessages,...augmented],
     temperature:0.1,
     max_tokens:GLM_MAX_TOKENS,
     stream:true,
@@ -162,27 +351,45 @@ app.post('/api/chat',(req,res)=>{
   res.setHeader('Cache-Control','no-cache');
   res.setHeader('Connection','keep-alive');
   const transport=url.protocol==='https:'?https:http;
-  let ended=false;
+  let ended=false,upstreamBytes=0,up;
+  let firstByteTimer=setTimeout(()=>{
+    fail(`Model did not start streaming within ${GLM_FIRST_BYTE_TIMEOUT_MS} ms. The selected model may still be loading or may be too large for available memory.`);
+    up?.destroy();
+  },GLM_FIRST_BYTE_TIMEOUT_MS);
+  firstByteTimer.unref?.();
+  const clearFirstByteTimer=()=>{
+    if(firstByteTimer){clearTimeout(firstByteTimer);firstByteTimer=null;}
+  };
   const fail=message=>{
     if(ended||res.writableEnded)return;
+    clearFirstByteTimer();
     ended=true;
     res.write(`data: ${JSON.stringify({error:message})}\n\n`);res.end();
   };
-  const up=transport.request({hostname:url.hostname,port:url.port||(url.protocol==='https:'?443:80),path:url.pathname,method:'POST',
+  up=transport.request({hostname:url.hostname,port:url.port||(url.protocol==='https:'?443:80),path:url.pathname,method:'POST',
     headers:{'Content-Type':'application/json','Content-Length':Buffer.byteLength(payload)}},
     r=>{
       if((r.statusCode||500)>=400){
+        clearFirstByteTimer();
         let body='';
         r.on('data',chunk=>{if(body.length<8192)body+=chunk;});
         r.on('end',()=>fail(`Model endpoint HTTP ${r.statusCode}: ${body.slice(0,500)}`));
         return;
       }
-      r.on('data',chunk=>{if(!res.writableEnded)res.write(chunk);});
-      r.on('end',()=>{if(!res.writableEnded){ended=true;res.end();}});
+      r.on('data',chunk=>{
+        upstreamBytes+=chunk.length;
+        clearFirstByteTimer();
+        if(!res.writableEnded)res.write(chunk);
+      });
+      r.on('end',()=>{
+        clearFirstByteTimer();
+        if(!upstreamBytes)return fail('Model endpoint closed without streaming a response');
+        if(!res.writableEnded){ended=true;res.end();}
+      });
     });
   up.setTimeout(GLM_TIMEOUT_MS,()=>up.destroy(new Error(`Model request timed out after ${GLM_TIMEOUT_MS} ms`)));
   up.on('error',error=>fail(error.message));
-  res.on('close',()=>{if(!res.writableEnded&&!ended)up.destroy();});
+  res.on('close',()=>{if(!res.writableEnded&&!ended){clearFirstByteTimer();up.destroy();}});
   up.write(payload);up.end();
 });
 
@@ -247,7 +454,19 @@ app.post('/api/repl/exec',async(req,res)=>{
 
 app.get('/api/session',(req,res)=>{
   const s=sess(req.query.sid||'default');
-  res.json({cwd:s.cwd,model:s.model,root:ROOT});
+  res.json({cwd:s.cwd,model:s.model,root:ROOT,memory:s.memory});
+});
+
+app.get('/api/memory',(req,res)=>{
+  const s=sess(req.query.sid||'default');
+  res.json({memory:s.memory});
+});
+
+app.post('/api/memory/clear',(req,res)=>{
+  const s=sess(req.body.sid||'default');
+  s.memory=writeStoredMemory([]);
+  setAllSessionMemory(s.memory);
+  res.json({ok:true,memory:s.memory});
 });
 
 function availableModels(){
@@ -343,6 +562,10 @@ app.get('/api/health',(_req,res)=>{
   });
   check.setTimeout(2000,()=>check.destroy(new Error('Model health check timed out')));
   check.on('error',error=>finish(false,error.message));
+});
+
+app.get('/api/resources',async(_req,res)=>{
+  res.json({vram:await queryVram(),ram:queryRam()});
 });
 
 const server=http.createServer(app);
@@ -583,4 +806,5 @@ if(require.main===module){
   server.listen(PORT,HOST,()=>console.log(`  glm-code http://${HOST}:${PORT}  model=${DEFAULT_MODEL}  root=${ROOT}`));
 }
 
-module.exports={app,server,safe,validSessionId,selectSessionModel,readUiConfig};
+module.exports={app,server,safe,validSessionId,selectSessionModel,readUiConfig,
+  parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,extractMemoryFacts,addMemoryFacts,memoryPrompt};

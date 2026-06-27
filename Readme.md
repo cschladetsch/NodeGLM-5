@@ -13,6 +13,7 @@ flowchart LR
     Server["Node server<br/>Express + WebSocket bridge"]
     Model["OpenAI-compatible endpoint<br/>Ollama, SGLang, or vLLM"]
     Files["Workspace files<br/>under SAFE_ROOT"]
+    Memory["Fact memory<br/>.nodeglm-memory.json"]
     Shell["Bash subprocesses"]
     Kai["CppKAI runtime<br/>Pi, Rho, Debug, Tree"]
 
@@ -20,13 +21,15 @@ flowchart LR
     Browser <-->|"WebSocket /api/kai"| Server
     Server <-->|"/v1/models<br/>/v1/chat/completions"| Model
     Server <-->|"validated paths"| Files
+    Server <-->|"read/write learned facts"| Memory
     Server <-->|"commands"| Shell
     Server <-->|"pseudo-terminal"| Kai
 ```
 
 The browser has no direct filesystem access. `server.js` validates file paths,
-tracks each browser session's working directory and selected model, proxies model
-traffic, and starts local subprocesses. `index.html` contains the client UI.
+tracks each browser session's working directory and selected model, extracts
+explicit user facts into persisted memory, proxies model traffic, and starts
+local subprocesses. `index.html` contains the client UI.
 
 ## Requirements
 
@@ -39,8 +42,10 @@ traffic, and starts local subprocesses. `index.html` contains the client UI.
 - Optional: Microsoft Edge and `msedgedriver` for the browser end-to-end test
 
 The default endpoint is Ollama at `http://localhost:11434`, using the
-`qwen2.5-coder:7b` coding model. The launcher uses memory-conservative Ollama
-defaults so it can run on an 8 GB GPU with CPU offload when needed.
+`qwen2.5-coder:7b` coding model. The launcher uses a 2048-token context and
+memory-conservative Ollama defaults so it can run on an 8 GB GPU with CPU
+offload when needed. If Ollama is already running before `./s` starts, restart
+Ollama so those memory settings take effect.
 
 ## Install
 
@@ -104,8 +109,9 @@ The UI has three persistent columns:
 - **File browser:** browses from the current session directory, hides dotfiles by
   default, opens files in the editor, and can inject up to 8 KB into chat.
 - **Chat and editor:** streams model responses, runs the bounded agent loop, and
-  remembers up to 100 messages in browser-local storage, and edits files with
-  Ace, Monokai, Vim bindings, syntax modes, and `Ctrl-S` or `Command-S` save.
+  remembers up to 100 messages in browser-local storage, tracks explicit user
+  facts in server-side memory, and edits files with Ace, Monokai, Vim bindings,
+  syntax modes, and `Ctrl-S` or `Command-S` save.
 - **Tools:** provides Bash plus a persistent CppKAI runtime with Pi, Rho,
   executor-attached Debug, and executor-attached Tree views.
 
@@ -113,10 +119,44 @@ Each browser session has its own current directory and selected model. A
 successful `cd` in Bash or through the Chat Box updates the shared directory
 used by Chat tools, Bash, and the file browser for that session. A `cd ...`
 entered directly in Chat is routed through the normal command-approval flow
-without asking the model to interpret it. Conversation memory survives page and
-server restarts and can be cleared from the chat input. Server-side working
-directory and model sessions expire after 24 hours when capacity cleanup runs
-and are lost when the server restarts.
+without asking the model to interpret it. Browser conversation memory survives
+page reloads, server-side fact memory survives server restarts, and both can be
+cleared from the chat input. Server-side working directory and model sessions
+expire after 24 hours when capacity cleanup runs and are lost when the server
+restarts.
+
+## Memory
+
+NodeGLM keeps two different forms of memory:
+
+- **Conversation memory:** the browser stores up to 100 stable chat messages in
+  `localStorage` so a page reload does not erase the visible transcript.
+- **Fact memory:** the server extracts explicit personal facts from user
+  messages, stores them in `.nodeglm-memory.json` under `SAFE_ROOT`, and injects
+  them into future model requests as a separate system message.
+
+Fact extraction is intentionally conservative. It captures forms such as
+`my name is ...`, `call me ...`, `my <thing> is ...`, `I am based in ...`, and
+`remember that ...`. It does not summarize arbitrary conversation turns. The
+chat footer shows the current fact count, and **Clear memory** clears both the
+browser transcript and the persisted fact file.
+
+```mermaid
+flowchart TD
+    UserMsg["User message"] --> Extract["Extract explicit facts"]
+    Extract --> Dedupe["Normalize and deduplicate"]
+    Dedupe --> Store["Persist under SAFE_ROOT<br/>.nodeglm-memory.json"]
+    Store --> Session["Refresh session memory"]
+    Session --> Prompt["Build memory system message"]
+    Prompt --> Model["OpenAI-compatible chat completion"]
+    Clear["Clear memory button"] --> ClearLocal["Remove browser transcript"]
+    Clear --> ClearServer["POST /api/memory/clear"]
+    ClearServer --> Store
+```
+
+Only explicit user-provided facts are stored. The memory file is ignored by Git
+to avoid accidentally committing personal data. Set `NODEGLM_MEMORY_FILE` to
+move the persisted fact store elsewhere.
 
 ## Agent Tool Flow
 
@@ -141,6 +181,8 @@ sequenceDiagram
 
     User->>UI: Send request
     UI->>API: POST /api/chat
+    API->>API: Extract and persist explicit facts
+    API->>API: Add memory system message when facts exist
     API->>LLM: Stream chat completion
     LLM-->>UI: Tool request via SSE
     alt read_file
@@ -194,15 +236,17 @@ before its spinner, progress bar, and elapsed timer appear.
 | `GLM_BASE_URL` | `http://localhost:11434` | OpenAI-compatible endpoint base URL |
 | `GLM_MODEL` | `qwen2.5-coder:7b` | Initial model for new sessions |
 | `GLM_TIMEOUT_MS` | `120000` | Chat request timeout; minimum 1000 ms |
+| `GLM_FIRST_BYTE_TIMEOUT_MS` | `90000` | Time allowed for a model stream to begin; minimum 1000 ms |
 | `GLM_MAX_TOKENS` | `4096` | Completion token limit; minimum 256 |
 | `GLM_HISTORY_MESSAGES` | `40` | Recent chat messages forwarded; minimum 4 |
 | `SAFE_ROOT` | `$HOME` | Root allowed by browser and agent file APIs |
+| `NODEGLM_MEMORY_FILE` | `$SAFE_ROOT/.nodeglm-memory.json` | Persisted explicit fact memory |
 | `PORT` | `3001` | HTTP port |
 | `HOST` | `127.0.0.1` | HTTP bind address |
 | `GLM_ALLOWED_ORIGINS` | local app URLs and `null` | Comma-separated CORS and WebSocket origins |
 | `MODEL_CACHE_ROOT` | `~/.models` | Cache root created by `./s` |
 | `OLLAMA_MODELS` | `~/.models/ollama` | Ollama cache exported by `./s` |
-| `OLLAMA_CONTEXT_LENGTH` | `4096` | Context limit used by launcher-managed Ollama |
+| `OLLAMA_CONTEXT_LENGTH` | `2048` | Context limit used by launcher-managed Ollama |
 | `OLLAMA_KV_CACHE_TYPE` | `q8_0` | Lower-memory KV cache used by launcher-managed Ollama |
 | `OLLAMA_GPU_OVERHEAD` | `1073741824` | VRAM reserved so Ollama can offload layers instead of overcommitting |
 | `OLLAMA_MAX_LOADED_MODELS` | `1` | Prevent multiple models competing for VRAM |
@@ -225,7 +269,9 @@ model on the inference server.
 | `POST /api/chat` | Proxy a streaming chat completion as server-sent events |
 | `GET /api/models` | List models installed at the inference endpoint |
 | `POST /api/session/model` | Select a model for one session |
-| `GET /api/session` | Return the session directory, model, and root |
+| `GET /api/session` | Return the session directory, model, root, and fact memory |
+| `GET /api/memory` | Return the persisted fact memory for a session |
+| `POST /api/memory/clear` | Clear persisted fact memory for all active sessions |
 | `POST /api/tool/bash` | Run an approved agent command and update session cwd |
 | `POST /api/tool/read_file` | Read an agent-requested file |
 | `POST /api/tool/write_file/diff` | Preview an agent-requested write |
@@ -273,6 +319,9 @@ process isolation. In particular:
   restrict shell commands.
 - Browser editor saves are direct writes and do not use the agent diff approval
   flow.
+- Fact memory is persisted as plaintext JSON. Keep `SAFE_ROOT` or
+  `NODEGLM_MEMORY_FILE` on local storage you trust, and clear memory before
+  sharing a workspace.
 - CORS is an origin check, not authentication.
 - The CppKAI WebSocket starts a local executable with the server user's
   permissions.
@@ -284,9 +333,9 @@ npm test
 ```
 
 The Node test suite covers API validation, path traversal and symlink defenses,
-session isolation, working-directory propagation, model selection, write diffs,
-executor inspection/debug wiring, Tree rendering, UI wiring, and editor
-configuration. The Edge end-to-end test runs only when
+session isolation, working-directory propagation, model selection, fact-memory
+extraction and clearing, write diffs, executor inspection/debug wiring, Tree
+rendering, UI wiring, and editor configuration. The Edge end-to-end test runs only when
 Edge and `msedgedriver` are available on `PATH`; set `EDGE_BIN` and
 `MSEDGEDRIVER` to use explicit executable paths.
 
@@ -294,13 +343,17 @@ Edge and `msedgedriver` are available on `PATH`; set `EDGE_BIN` and
 
 - **No models found:** verify that `GLM_BASE_URL/v1/models` returns an
   OpenAI-compatible model list.
-- **CUDA buffer allocation fails:** select `qwen2.5-coder:7b` or another model
-  below 5 GB, close other GPU-heavy applications, and restart with `./s`. The
-  launcher permits CPU offload and does not require replacing the GPU.
+- **CUDA buffer allocation fails:** close other GPU-heavy applications, stop any
+  already-running Ollama daemon, and restart with `./s` so the 2048-token
+  context, quantized KV cache, single-model loading, and CPU offload settings
+  apply. If `qwen2.5-coder:7b` still cannot allocate on an 8 GB card, choose a
+  smaller installed model from the header.
 - **Ollama model is not installed:** run `ollama pull <model>` before `./s`.
 - **Port already in use:** stop the existing server or set another `PORT`.
 - **Outside sandbox:** choose a path under `SAFE_ROOT`; symlink escapes are
   intentionally rejected.
+- **Wrong remembered fact:** click **Clear memory** in the chat footer, or edit
+  or remove `.nodeglm-memory.json` under `SAFE_ROOT` while the server is stopped.
 - **CppKAI Console is not built:** initialize the submodules and build the
   executable configured by `KAI_CONSOLE`.
 - **Origin not allowed:** add the exact browser origin to

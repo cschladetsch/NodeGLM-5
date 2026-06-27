@@ -17,6 +17,8 @@ The current workspace includes:
 - diff previews before agent-proposed changes are applied;
 - an Ace editor with Vim bindings and syntax highlighting;
 - a filesystem browser, Chat Box, and Bash REPL with a shared working directory;
+- explicit fact memory for details like the user's name, preferences, and other
+  user-provided facts;
 - per-session model selection; and
 - a persistent CppKAI runtime with Pi and Rho consoles plus executor-attached
   Debug and Tree panels.
@@ -33,7 +35,33 @@ runs with the server user's permissions, so approval and OS-level isolation stil
 matter.
 
 I have also brought the project documentation up to date with Mermaid diagrams
-covering the architecture, agent approval sequence, and path-validation flow.
+covering the architecture, fact memory, agent approval sequence, and
+path-validation flow.
+
+```mermaid
+flowchart LR
+    Browser["Browser UI"] --> Server["NodeGLM server"]
+    Server --> Model["OpenAI-compatible model endpoint"]
+    Server --> Files["SAFE_ROOT workspace"]
+    Server --> Memory["Persisted fact memory"]
+    Server --> Shell["Approval-gated Bash"]
+    Server --> Kai["CppKAI runtime"]
+```
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant UI as Browser
+    participant API as NodeGLM server
+    participant LLM as Model
+
+    User->>UI: My name is Christian
+    UI->>API: POST /api/chat
+    API->>API: Extract explicit fact
+    API->>API: Persist .nodeglm-memory.json
+    API->>LLM: Prompt with known facts when relevant
+    LLM-->>User: Response using remembered context
+```
 
 Next: [briefly describe the next technical milestone].
 

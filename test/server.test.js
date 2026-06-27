@@ -6,7 +6,9 @@ const path = require('node:path');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'glm-code-test-'));
 process.env.SAFE_ROOT = root;
-const {app, safe, validSessionId, selectSessionModel, readUiConfig} = require('../server');
+const {app, safe, validSessionId, selectSessionModel, readUiConfig,
+  parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,
+  extractMemoryFacts,addMemoryFacts,memoryPrompt} = require('../server');
 
 test.after(() => {
   fs.rmSync(root, {recursive:true, force:true});
@@ -64,6 +66,54 @@ test('UI config endpoint returns the validated request progress threshold', asyn
   assert.equal(response.statusCode,200);
   assert.deepEqual(response.body,readUiConfig());
   assert.equal(typeof response.body.requestProgressDelaySeconds,'number');
+});
+
+test('VRAM parser summarizes app and overall GPU memory', () => {
+  const gpus=parseGpuRows('GPU-abc, 0, NVIDIA RTX 2070, 6144, 8192\n');
+  const processes=parseGpuProcessRows([
+    'GPU-abc, 111, /usr/bin/ollama, 5120',
+    'GPU-abc, 222, /usr/bin/kwin, 256',
+  ].join('\n'));
+  const summary=summarizeVram(gpus,processes,new Set([333]),true);
+  assert.equal(summary.available,true);
+  assert.equal(summary.total.usedMiB,6144);
+  assert.equal(summary.total.totalMiB,8192);
+  assert.equal(summary.total.appUsedMiB,5120);
+  assert.equal(summary.gpus[0].appUsedMiB,5120);
+});
+
+test('RAM summary reports system and app memory in MiB', () => {
+  const summary=queryRam();
+  assert.equal(summary.available,true);
+  assert.equal(summary.source,'node-os');
+  assert.ok(summary.total.totalMiB>0);
+  assert.ok(summary.total.usedMiB>=0);
+  assert.ok(summary.total.appUsedMiB>0);
+});
+
+test('memory extraction captures explicit user facts', () => {
+  const facts=extractMemoryFacts('My name is Christian. My favorite editor is Vim. Remember that I prefer direct answers.');
+  assert.deepEqual(facts,[
+    'I prefer direct answers',
+    "The user's name is Christian",
+    "The user's favorite editor is Vim",
+  ]);
+});
+
+test('session memory deduplicates facts and builds a prompt block', () => {
+  const session={memory:[]};
+  addMemoryFacts(session,['The user likes Vim','the user likes Vim','The user works in NodeGLM']);
+  assert.deepEqual(session.memory,['the user likes Vim','The user works in NodeGLM']);
+  assert.match(memoryPrompt(session),/Known user facts/);
+  assert.match(memoryPrompt(session),/- the user likes Vim/);
+});
+
+test('memory endpoint reports and clears session facts', async () => {
+  const before=await invoke('get','/api/memory',{}, {sid:'memory'});
+  assert.deepEqual(before.body.memory,[]);
+  const cleared=await invoke('post','/api/memory/clear',{sid:'memory'});
+  assert.equal(cleared.body.ok,true);
+  assert.deepEqual(cleared.body.memory,[]);
 });
 
 test('UI config accepts zero and fractional progress delays', () => {
