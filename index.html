@@ -474,6 +474,40 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .model-install-body {
+    padding: 16px;
+    overflow: auto;
+    font: 12px/1.5 var(--mono);
+    color: var(--text);
+  }
+  .model-install-progress {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin-bottom: 10px;
+  }
+  .model-install-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: request-spin .8s linear infinite;
+  }
+  .model-install-track {
+    height: 5px;
+    overflow: hidden;
+    border-radius: 3px;
+    background: var(--border);
+    margin: 8px 0 10px;
+  }
+  .model-install-bar {
+    height: 100%;
+    width: 0;
+    border-radius: inherit;
+    background: var(--accent);
+    transition: width .18s ease;
+  }
   .chat-input-files {
     display: flex;
     flex-wrap: wrap;
@@ -1826,6 +1860,7 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
   const taRef = useRef(null);
   const abortRef = useRef(null);
   const chatDraftRef = useRef('');
+  const wasChatBusyRef = useRef(false);
 
   const loadMemoryFacts = useCallback(() => {
     fetch(`${API}/api/memory?sid=${encodeURIComponent(SID)}`)
@@ -1870,6 +1905,16 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
       taRef.current.style.height = Math.min(taRef.current.scrollHeight, 180) + 'px';
     }
   }, [input]);
+
+  const focusChatInput = useCallback(() => {
+    requestAnimationFrame(() => taRef.current?.focus());
+  }, []);
+
+  useEffect(() => {
+    const busy = streaming || Boolean(pendingAction);
+    if (wasChatBusyRef.current && !busy) focusChatInput();
+    wasChatBusyRef.current = busy;
+  }, [streaming, pendingAction, focusChatInput]);
 
   const updateMessage = (id, patch) => setMessages(current => current.map(
     message => message.id === id ? {...message,...patch} : message
@@ -2245,6 +2290,49 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
   );
 }
 
+function ModelInstallModal({state,onClose,onStop}){
+  if(!state)return null;
+  const busy=state.status==='installing';
+  const percent=Number.isFinite(state.percent)?Math.max(0,Math.min(100,Math.round(state.percent))):null;
+  const [now,setNow]=useState(Date.now());
+  useEffect(()=>{
+    if(!busy)return;
+    const timer=setInterval(()=>setNow(Date.now()),1000);
+    return()=>clearInterval(timer);
+  },[busy]);
+  const elapsed=busy&&state.startedAt ? Math.max(0,Math.floor((now-state.startedAt)/1000)) : null;
+  return (
+    <div className="memory-editor-backdrop" role="dialog" aria-modal="true" aria-label="Model install">
+      <div className="memory-editor" style={{height:'auto',maxHeight:'min(520px, calc(100vh - 48px))'}}>
+        <div className="memory-editor-head">
+          <strong>Install Model</strong>
+          <span>{state.model}</span>
+          <span className="memory-editor-status" style={{color:state.status==='failed'?'var(--warn)':state.status==='installed'?'var(--accent2)':'var(--muted)'}}>
+            {state.status}
+          </span>
+          {busy&&<button className="btn btn-ghost" style={{fontSize:11,padding:'4px 10px'}}
+            onClick={onStop}>Stop</button>}
+          <button className="btn btn-ghost" style={{fontSize:11,padding:'4px 10px'}}
+            onClick={onClose}>Close</button>
+        </div>
+        <div className="model-install-body">
+          <div className="model-install-progress">
+            {busy&&<span className="model-install-spinner" aria-hidden="true"/>}
+            <span>{busy?'Downloading model':'Install request finished.'}</span>
+            {percent!==null&&<strong>{percent}% downloaded</strong>}
+          </div>
+          <div className="model-install-track" aria-hidden={percent===null}>
+            <div className="model-install-bar" style={{width:`${percent??0}%`}}/>
+          </div>
+          {state.statusText&&<div>{state.statusText}{elapsed!==null&&busy?` (${elapsed}s)`:''}</div>}
+          {state.target&&<div>Model path: {state.target}</div>}
+          {state.error&&<div style={{color:'var(--warn)',marginTop:10}}>{state.error}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Root App ───────────────────────────────────────────────────────────────
 function App() {
   const [rtab, setRtab]         = useState('bash');
@@ -2259,6 +2347,8 @@ function App() {
   const [modelInfo, setModelInfo] = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [modelError, setModelError] = useState('');
+  const [installState,setInstallState] = useState(null);
+  const installAbortRef = useRef(null);
   const [vram, setVram] = useState(null);
   const [ram, setRam] = useState(null);
 
@@ -2274,11 +2364,72 @@ function App() {
     return () => clearInterval(t);
   }, []);
 
-  const chooseModel = async (model) => {
+  const loadModels = async () => {
+    const response=await fetch(`${API}/api/models?sid=${encodeURIComponent(SID)}`);
+    const body=await response.json();
+    if(!response.ok||body.error)throw new Error(body.error||`HTTP ${response.status}`);
+    setModels(body.models||[]);
+    setModelInfo(body.modelInfo||[]);
+    return body;
+  };
+
+  const installModel = async (model) => {
     setModelError('');
-    const info=modelInfo.find(item=>item.id===model);
+    setInstallState({model,status:'installing',target:'global Ollama model path',percent:null,statusText:'Fetching model manifest',startedAt:Date.now()});
+    const controller=new AbortController();
+    installAbortRef.current=controller;
+    try{
+      const response=await fetch(`${API}/api/models/install`,{
+        method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({sid:SID,model}),
+        signal:controller.signal,
+      });
+      if(!response.ok){
+        const result=await response.json().catch(()=>({}));
+        throw new Error(result.error||`HTTP ${response.status}`);
+      }
+      const reader=response.body.getReader();
+      const dec=new TextDecoder();
+      let buffer='',doneEvent=null;
+      while(true){
+        const {done,value}=await reader.read();
+        if(done)break;
+        buffer+=dec.decode(value,{stream:true});
+        const lines=buffer.split('\n');buffer=lines.pop();
+        for(const line of lines){
+          if(!line.trim())continue;
+          const event=JSON.parse(line);
+          if(event.type==='start')setInstallState(current=>({...current,target:event.target,statusText:event.statusText||current.statusText,startedAt:current.startedAt||Date.now()}));
+          else if(event.type==='progress')setInstallState(current=>({
+            ...current,
+            statusText:event.statusText||current.statusText,
+            percent:Number.isFinite(event.percent)?event.percent:current.percent
+          }));
+          else if(event.type==='done')doneEvent=event;
+          else if(event.type==='error')throw new Error(event.error||'model install failed');
+        }
+      }
+      if(!doneEvent)throw new Error('model install ended without completion');
+      setModels(doneEvent.models||[]);
+      setModelInfo(doneEvent.modelInfo||[]);
+      setInstallState({model,status:'installed',target:doneEvent.target,percent:100,statusText:'Installed',startedAt:Date.now()});
+      await chooseModel(model,doneEvent.modelInfo||[]);
+    }catch(error){
+      const stopped=error.name==='AbortError';
+      const message=stopped?'Install stopped.':error.message;
+      setModelError(message);
+      setInstallState(current=>({...current,model,status:stopped?'stopped':'failed',error:message,statusText:stopped?'Stopped by user':current?.statusText,startedAt:current?.startedAt||Date.now()}));
+    }finally{
+      if(installAbortRef.current===controller)installAbortRef.current=null;
+    }
+  };
+  const stopInstall = () => installAbortRef.current?.abort();
+
+  const chooseModel = async (model,infoList=modelInfo) => {
+    setModelError('');
+    const info=infoList.find(item=>item.id===model);
     if(info&&!info.installed){
-      setModelError(`Install ${model} first: ollama pull ${model}`);
+      installModel(model);
       return;
     }
     try{
@@ -2294,16 +2445,12 @@ function App() {
   };
 
   useEffect(() => {
-    fetch(`${API}/api/models?sid=${encodeURIComponent(SID)}`)
-      .then(response=>response.json().then(body=>({response,body})))
-      .then(({response,body})=>{
-        if(!response.ok||body.error)throw new Error(body.error||`HTTP ${response.status}`);
-        setModels(body.models||[]);
-        setModelInfo(body.modelInfo||[]);
+    loadModels()
+      .then(body=>{
         const preferred=localStorage.getItem('glm-selected-model');
         const next=preferred&&body.models.includes(preferred)?preferred:body.selected;
         setSelectedModel(next);
-        if(next&&next!==body.selected)chooseModel(next);
+        if(next&&next!==body.selected)chooseModel(next,body.modelInfo||[]);
       })
       .catch(error=>setModelError(error.message));
   }, []);
@@ -2363,12 +2510,13 @@ function App() {
 
   return (
     <>
+      <ModelInstallModal state={installState} onClose={()=>setInstallState(null)} onStop={stopInstall}/>
       <div className="header">
         <span className="header-logo">GLM</span>
         <select className="model-select" value={selectedModel} onChange={event=>chooseModel(event.target.value)}
           disabled={modelInfo.length===0} title={modelError||modelTitle(selectedModelInfo)}>
           {models.length===0 && <option value="">No models found</option>}
-          {modelInfo.map(model=><option key={model.id} value={model.id} disabled={!model.installed} title={modelTitle(model)}>
+          {modelInfo.map(model=><option key={model.id} value={model.id} title={modelTitle(model)}>
             {modelOptionLabel(model)}
           </option>)}
         </select>

@@ -76,11 +76,47 @@ test('header selects among models installed in the active endpoint',()=>{
   assert.match(html,/function modelTitle\(model\)/);
   assert.match(html,/function modelOptionLabel\(model\)/);
   assert.match(html,/ollama pull \$\{model\.id\}/);
-  assert.match(html,/disabled=\{!model\.installed\}/);
+  assert.match(html,/function ModelInstallModal/);
+  assert.match(html,/api\/models\/install/);
+  assert.match(html,/setInstallState\(\{model,status:'installing'/);
+  assert.match(html,/Model path: \{state\.target\}/);
+  assert.match(html,/className="model-install-spinner"/);
+  assert.match(html,/className="model-install-track"/);
+  assert.match(html,/className="model-install-bar"/);
+  assert.match(html,/% downloaded/);
+  assert.match(html,/width:`\$\{percent\?\?0\}%`/);
+  assert.match(html,/Downloading model/);
+  assert.match(html,/startedAt:Date\.now\(\)/);
+  assert.match(html,/elapsed!==null&&busy/);
+  assert.match(html,/onClick=\{onStop\}>Stop<\/button>/);
+  assert.match(html,/const installAbortRef = useRef\(null\)/);
+  assert.match(html,/signal:controller\.signal/);
+  assert.match(html,/installAbortRef\.current\?\.abort\(\)/);
+  assert.match(html,/status:stopped\?'stopped':'failed'/);
+  assert.doesNotMatch(html,/onClose\} disabled=\{busy\}/);
+  assert.match(html,/response\.body\.getReader\(\)/);
+  assert.match(html,/event\.type==='progress'/);
+  assert.match(html,/statusText:event\.statusText\|\|current\.statusText/);
+  assert.match(html,/statusText:'Fetching model manifest'/);
+  assert.match(html,/\{state\.statusText&&<div>\{state\.statusText\}\{elapsed!==null&&busy\?` \(\$\{elapsed\}s\)`:''\}<\/div>\}/);
+  assert.doesNotMatch(html,/state\.output&&<pre>/);
+  assert.doesNotMatch(html,/output:\(current\.output\+/);
+  assert.doesNotMatch(html,/disabled=\{!model\.installed\}/);
   assert.match(html,/className="header-status model-hint"/);
   assert.match(server,/app\.get\('\/api\/models'/);
+  assert.match(server,/app\.post\('\/api\/models\/install'/);
+  assert.match(server,/application\/x-ndjson/);
+  assert.match(server,/req\.on\('aborted'/);
+  assert.match(server,/child\.kill\('SIGTERM'\)/);
+  assert.match(server,/type:'progress'/);
+  assert.match(server,/lastClean/);
+  assert.match(server,/function installStatusText/);
+  assert.match(server,/Fetching model manifest/);
+  assert.match(server,/statusText:installStatusText\(clean,percent\)/);
+  assert.match(server,/\\d\{1,3\}\)%/);
   assert.match(server,/RECOMMENDED_MODELS/);
   assert.match(server,/modelInfo:modelInfo\(models\)/);
+  assert.match(server,/OLLAMA_MODELS/);
   assert.match(server,/app\.post\('\/api\/session\/model'/);
   assert.match(server,/model:s\.model/);
 });
@@ -128,6 +164,14 @@ test('main chat input supports arrow-key user message history',()=>{
   assert.match(html,/e\.key==='ArrowDown'/);
   assert.match(html,/setInput\(nextIndex<0\?chatDraftRef\.current:userInputHistory\[nextIndex\]\)/);
   assert.match(html,/textarea\.setSelectionRange\(textarea\.value\.length,textarea\.value\.length\)/);
+});
+
+test('main chat input regains focus after each request settles',()=>{
+  assert.match(html,/const wasChatBusyRef = useRef\(false\)/);
+  assert.match(html,/const focusChatInput = useCallback\(\(\) => \{/);
+  assert.match(html,/requestAnimationFrame\(\(\) => taRef\.current\?\.focus\(\)\)/);
+  assert.match(html,/if \(wasChatBusyRef\.current && !busy\) focusChatInput\(\)/);
+  assert.match(html,/wasChatBusyRef\.current = busy/);
 });
 
 test('chat persists bounded conversation memory in local storage',()=>{

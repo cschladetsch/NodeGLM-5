@@ -8,7 +8,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'glm-code-test-'));
 process.env.SAFE_ROOT = root;
 const {app, safe, validSessionId, selectSessionModel, readUiConfig,
   parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,
-  extractMemoryFacts,addMemoryFacts,memoryPrompt,modelInfo,RECOMMENDED_MODELS} = require('../server');
+  extractMemoryFacts,addMemoryFacts,memoryPrompt,modelInfo,RECOMMENDED_MODELS,isInstallableModel,cleanInstallOutput,installStatusText} = require('../server');
 
 test.after(() => {
   fs.rmSync(root, {recursive:true, force:true});
@@ -169,6 +169,21 @@ test('model metadata includes installed and potential smaller models', async () 
   assert.equal(info.find(model=>model.id==='qwen2.5-coder:1.5b').installed,false);
   assert.equal(info.find(model=>model.id==='custom:latest').installed,true);
   assert.match(info.find(model=>model.id==='qwen2.5-coder:1.5b').vram,/GB/);
+  assert.equal(isInstallableModel('qwen2.5-coder:1.5b'),true);
+  assert.equal(isInstallableModel('custom:latest'),false);
+});
+
+test('model install output strips terminal control sequences', async () => {
+  const clean=cleanInstallOutput('\u001b[?25l\u001b[1Gpulling manifest ⠼ \u001b[K\u001b[?25h\u001b[?2026l');
+  assert.equal(clean,'pulling manifest');
+  assert.doesNotMatch(clean,/\[?\d+[A-Za-z]/);
+  assert.doesNotMatch(clean,/⠼/);
+  assert.equal(cleanInstallOutput('pulling manifest\npulling manifest\n'),'pulling manifest');
+  assert.equal(installStatusText('pulling manifest',undefined),'Fetching model manifest');
+  const layerDigest='a'.repeat(12);
+  assert.equal(installStatusText(`pulling ${layerDigest}`,undefined),'Downloading model layers');
+  assert.equal(installStatusText(`pulling ${layerDigest}: 18%`,18),'Downloading model layers');
+  assert.equal(installStatusText('verifying sha256 digest',undefined),'verifying sha256 digest');
 });
 
 test('browser editor writes ROOT-relative files', async () => {

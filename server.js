@@ -7,6 +7,8 @@ const ROOT  =fs.realpathSync(path.resolve(process.env.SAFE_ROOT||process.env.HOM
 const PORT  =process.env.PORT        ||3001;
 const HOST  =process.env.HOST        ||'127.0.0.1';
 const DEFAULT_MODEL=process.env.GLM_MODEL||'qwen2.5-coder:7b';
+const MODEL_CACHE_ROOT=process.env.MODEL_CACHE_ROOT||path.join(os.homedir(),'.models');
+const OLLAMA_MODELS=process.env.OLLAMA_MODELS||path.join(MODEL_CACHE_ROOT,'ollama');
 const GLM_TIMEOUT_MS=Math.max(1000,Number(process.env.GLM_TIMEOUT_MS)||120000);
 const GLM_FIRST_BYTE_TIMEOUT_MS=Math.max(1000,Number(process.env.GLM_FIRST_BYTE_TIMEOUT_MS)||90000);
 const GLM_MAX_TOKENS=Math.max(256,Number(process.env.GLM_MAX_TOKENS)||4096);
@@ -523,12 +525,102 @@ function modelInfo(installed){
     .map(model=>({...model,installed:installedSet.has(model.id)}));
 }
 
+function isInstallableModel(model){
+  return typeof model==='string'&&RECOMMENDED_MODELS.some(item=>item.id===model);
+}
+
+function cleanInstallOutput(text){
+  return String(text)
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g,'')
+    .replace(/\[[?]?\d+[a-z]/gi,'')
+    .replace(/\[[0-9]+[A-Z]/g,'')
+    .replace(/[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/g,'')
+    .replace(/\r/g,'\n')
+    .split('\n')
+    .map(line=>line.trim())
+    .filter(Boolean)
+    .filter((line,index,lines)=>index===0||line!==lines[index-1])
+    .slice(-8)
+    .join('\n');
+}
+
+function installStatusText(clean,percent){
+  const lines=String(clean||'').split('\n').map(line=>line.trim()).filter(Boolean);
+  if(Number.isFinite(percent))return 'Downloading model layers';
+  if(lines.some(line=>/^pulling manifest\b/i.test(line)))return 'Fetching model manifest';
+  if(lines.some(line=>/^pulling [0-9a-f]{8,}\b/i.test(line)))return 'Downloading model layers';
+  const useful=lines.filter(line=>!/^pulling (manifest|[0-9a-f]{8,})\b/i.test(line));
+  return useful[useful.length-1]||'';
+}
+
 app.get('/api/models',async(req,res)=>{
   try{
     const s=sess(req.query.sid||'default');
     const models=await availableModels();
     res.json({models,modelInfo:modelInfo(models),selected:s.model});
   }catch(error){res.status(502).json({error:error.message});}
+});
+
+app.post('/api/models/install',async(req,res)=>{
+  const model=req.body?.model;
+  if(!isInstallableModel(model))return res.status(400).json({error:'model is not installable'});
+  if(!isLocalModelEndpoint())return res.status(400).json({error:'model install is only available for local Ollama endpoints'});
+  const target=OLLAMA_MODELS;
+  try{
+    fs.mkdirSync(target,{recursive:true});
+    res.setHeader('Content-Type','application/x-ndjson');
+    res.setHeader('Cache-Control','no-cache');
+    res.setHeader('X-Accel-Buffering','no');
+    const send=event=>res.write(`${JSON.stringify(event)}\n`);
+    send({type:'start',model,target,statusText:'Fetching model manifest'});
+    const child=spawn('ollama',['pull',model],{
+      env:{...process.env,OLLAMA_MODELS:target},
+      stdio:['ignore','pipe','pipe']
+    });
+    let output='';
+    let lastClean='';
+    let clientClosed=false;
+    req.on('aborted',()=>{
+      clientClosed=true;
+      if(!child.killed)child.kill('SIGTERM');
+    });
+    const onData=chunk=>{
+      const text=String(chunk);
+      const clean=cleanInstallOutput(text);
+      const fresh=Boolean(clean&&clean!==lastClean);
+      if(fresh){
+        output=(output+clean+'\n').slice(-20000);
+        lastClean=clean;
+      }
+      const percents=[...text.matchAll(/(\d{1,3})%/g)].map(match=>Math.min(100,Number(match[1])));
+      const percent=percents.length?percents[percents.length-1]:undefined;
+      send({type:'progress',statusText:installStatusText(clean,percent),text:fresh?`${clean}\n`:'',...(percent!==undefined?{percent}:{})});
+    };
+    child.stdout.on('data',onData);
+    child.stderr.on('data',onData);
+    child.on('error',error=>{
+      if(clientClosed)return;
+      send({type:'error',error:error.message,target,model,output});
+      res.end();
+    });
+    child.on('close',async code=>{
+      if(clientClosed)return;
+      if(code!==0){
+        send({type:'error',error:(output||`ollama pull exited ${code}`).trim(),target,model,output});
+        res.end();
+        return;
+      }
+      try{
+        const models=await availableModels();
+        send({type:'done',ok:true,model,target,models,modelInfo:modelInfo(models),output,percent:100});
+      }catch(error){
+        send({type:'error',error:error.message,target,model,output});
+      }
+      res.end();
+    });
+  }catch(error){
+    res.status(500).json({error:error.message,target,model});
+  }
 });
 
 function selectSessionModel(sid,model,models){
@@ -843,4 +935,4 @@ if(require.main===module){
 
 module.exports={app,server,safe,validSessionId,selectSessionModel,readUiConfig,
   parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,extractMemoryFacts,addMemoryFacts,memoryPrompt,
-  modelInfo,RECOMMENDED_MODELS};
+  modelInfo,RECOMMENDED_MODELS,isInstallableModel,cleanInstallOutput,installStatusText};
