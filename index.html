@@ -686,10 +686,46 @@
   .executor-toolbar select { flex:1;min-width:0;background:var(--raised);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:5px 7px;font:11px var(--mono); }
   .executor-meta { padding:7px 10px;color:var(--muted);border-bottom:1px solid var(--border);font:10px/1.5 var(--mono); }
   .tree-nodes { flex:1;overflow:auto;padding:8px 0;font:11px/1.55 var(--mono); }
-  .tree-node { display:flex;gap:7px;padding:1px 10px;white-space:nowrap; }
-  .tree-node:hover { background:var(--raised); }
+  .tree-row {
+    display:flex;
+    align-items:center;
+    gap:7px;
+    padding:2px 10px 2px 8px;
+    white-space:nowrap;
+    user-select:none;
+  }
+  .tree-row:hover { background:var(--raised); }
+  .tree-row.branch { cursor:pointer; }
+  .tree-row.collapsed .tree-label { opacity:.78; }
+  .tree-toggle {
+    width:12px;
+    flex:0 0 12px;
+    color:var(--accent);
+    text-align:center;
+    font-size:10px;
+  }
   .tree-label { color:var(--text); }
   .tree-type { color:var(--muted); }
+  .tree-count {
+    margin-left:auto;
+    color:var(--muted);
+    font-size:10px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pi-op-bar {
+    display:flex;
+    flex-wrap:wrap;
+    gap:6px;
+    padding:8px 10px;
+    border-bottom:1px solid var(--border);
+    background:var(--surface);
+    flex-shrink:0;
+  }
+  .pi-op-bar .btn {
+    padding:4px 8px;
+    font-size:10px;
+    line-height:1;
+  }
   .debug-actions { display:flex;gap:6px;padding:8px 10px;border-bottom:1px solid var(--border); }
   .kai-out {
     flex: 1;
@@ -818,7 +854,7 @@
 <div id="root"></div>
 
 <script type="text/babel">
-const { useState, useEffect, useLayoutEffect, useRef, useCallback } = React;
+const { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo, Fragment } = React;
 
 // Prefer the server that delivered the UI. Retain direct file:// support for
 // local use, where there is no page origin to target.
@@ -1186,16 +1222,50 @@ const PI_TOKEN_STYLES={
 function normalizeKaiIndices(text,mode){
   const sgr='(?:\\u001b\\[[0-9;]*m)*';
   const promptPattern=new RegExp(`\\[\\d+\\](?=${sgr}\\s+${sgr}[πρλ$])`);
-  return text.split('\n').map(line=>{
+  const stackLinePattern=/^((?:\u001b\[[0-9;]*m)*)\[(\d+)\]:?\s*(.*)$/;
+  const stackVisiblePattern=/^\[\d+\]:?/;
+  const lines=text.split('\n').map(line=>{
     if(promptPattern.test(line))line=line.replace(/\[\d+\]\s*/, '');
-    const visible=line.replace(/\u001b\[[0-9;]*m/g,'').trim();
-    if(mode==='pi'&&visible==='π')return '';
     return line;
-  }).join('\n');
+  });
+  if(mode!=='pi'){
+    return lines.map(line=>{
+      const visible=line.replace(/\u001b\[[0-9;]*m/g,'').trim();
+      return visible==='π' ? '' : line;
+    }).join('\n');
+  }
+  const output=[];
+  let stackBlock=[];
+  const rewriteStackLine=(line,index)=>{
+    const match=line.match(stackLinePattern);
+    if(!match)return line;
+    const prefix=match[1]||'';
+    const value=match[3]||'';
+    return `${prefix}[${index}]:${value ? ` ${value}` : ''}`;
+  };
+  const flushStackBlock=()=>{
+    if(!stackBlock.length)return;
+    stackBlock.slice().reverse().forEach((line,i)=>{
+      output.push(rewriteStackLine(line,stackBlock.length-1-i));
+    });
+    stackBlock=[];
+  };
+  for(const line of lines){
+    const visible=line.replace(/\u001b\[[0-9;]*m/g,'').trim();
+    if(visible==='π')continue;
+    if(stackVisiblePattern.test(visible)){
+      stackBlock.push(line);
+      continue;
+    }
+    flushStackBlock();
+    output.push(line);
+  }
+  flushStackBlock();
+  return output.join('\n');
 }
 
 function piTokenStyle(token){
-  if(/^\[\d+\]:?$/.test(token))return PI_TOKEN_STYLES.stack;
+  if(/^\[\d+\]:?/.test(token))return PI_TOKEN_STYLES.stack;
   if(/^[πρλ$]$/.test(token))return PI_TOKEN_STYLES.prompt;
   if(/^"/.test(token))return PI_TOKEN_STYLES.string;
   if(/^(true|false)$/.test(token))return PI_TOKEN_STYLES.boolean;
@@ -1263,11 +1333,107 @@ function ExecutorSelect({executors,value,onChange}){
   </select>;
 }
 
-function TreeInspector({snapshot,onRefresh}){
+function buildTreeExplorer(nodes){
+  const roots=[];
+  const stack=[];
+  for(const original of nodes||[]){
+    const depth=Number.isFinite(original?.depth)?original.depth:0;
+    const node={...original,depth,children:[]};
+    while(stack.length&&stack[stack.length-1].depth>=depth)stack.pop();
+    const parent=stack[stack.length-1];
+    if(parent)parent.children.push(node);
+    else roots.push(node);
+    stack.push(node);
+  }
+  return roots;
+}
+
+function treeNodeSummary(node, exec){
+  const pieces=[
+    `Label: ${node?.label||'/'}`,
+    `Type: ${node?.type||'unknown'}`,
+    `Node: #${node?.id}`,
+    `Depth: ${Number.isFinite(node?.depth)?node.depth:0}`,
+    node?.path?`Path: ${node.path}`:'',
+    node?.value?`Value: ${node.value}`:'',
+    node?.text?`Text: ${node.text}`:'',
+    node?.source?`Source: ${node.source}`:'',
+    exec?.treeId?`Tree: ${exec.treeId}`:'',
+    exec?.rootId?`Root: #${exec.rootId}`:'',
+    exec?.scope?`Scope: ${exec.scope}`:exec?.scopeId?`Scope: #${exec.scopeId}`:'',
+  ].filter(Boolean);
+  if(/continuation/i.test(String(node?.type||node?.label||'')))pieces.push('Double-click to paste to Pi');
+  return pieces.join('\n');
+}
+
+function getContinuationPasteText(node){
+  return String(node?.text??node?.value??node?.source??node?.code??node?.expression??node?.label??node?.path??'').trim();
+}
+
+function isContinuationNode(node){
+  return /continuation/i.test(String(node?.type||node?.label||node?.path||''));
+}
+
+const PI_STACK_OPS = [
+  {word:'dup', title:'Duplicate the top stack item'},
+  {word:'swap', title:'Swap the top two stack items'},
+  {word:'drop', title:'Remove the top stack item'},
+  {word:'rot', title:'Rotate the top three stack items'},
+  {word:'roll', title:'Roll a deeper stack item to the top'},
+  {word:'over', title:'Copy the second item to the top'},
+  {word:'depth', title:'Push the current stack depth'},
+];
+
+function TreeInspector({snapshot,onRefresh,onPasteContinuation}){
   const executors=snapshot?.executors||[];
   const [selected,setSelected]=useState('');
+  const [collapsed,setCollapsed]=useState(()=>new Set());
   useEffect(()=>{if(!executors.some(exec=>exec.id===selected))setSelected(executors[0]?.id||'');},[snapshot,selected]);
   const exec=executors.find(item=>item.id===selected);
+  const tree=useMemo(()=>buildTreeExplorer(exec?.nodes||[]),[exec]);
+  useEffect(()=>{
+    setCollapsed(current=>{
+      const keep=new Set();
+      const visit=items=>{
+        for(const item of items){
+          if(current.has(String(item.id)))keep.add(String(item.id));
+          if(item.children?.length)visit(item.children);
+        }
+      };
+      visit(tree);
+      return keep;
+    });
+  },[tree]);
+  const toggleNode=id=>setCollapsed(current=>{
+    const next=new Set(current);
+    if(next.has(id))next.delete(id);
+    else next.add(id);
+    return next;
+  });
+  const renderNode=(node,level=0)=>{
+    const key=String(node.id);
+    const hasChildren=Boolean(node.children?.length);
+    const closed=collapsed.has(key);
+    const branchClass=`tree-row${hasChildren?' branch':''}${closed?' collapsed':''}`;
+    const pasteText=isContinuationNode(node)?getContinuationPasteText(node):'';
+    return (
+      <Fragment key={key}>
+        <div
+          className={branchClass}
+          style={{paddingLeft:10+level*16}}
+          title={treeNodeSummary(node,exec)}
+          onClick={hasChildren?()=>toggleNode(key):undefined}
+          onDoubleClick={isContinuationNode(node)&&pasteText?()=>onPasteContinuation?.(pasteText):undefined}
+        >
+          <span className="tree-toggle" aria-hidden="true">{hasChildren?(closed?'▸':'▾'):'•'}</span>
+          <span className="tree-label">{node.label||'/'}</span>
+          <span className="tree-type">{node.type} #{node.id}</span>
+          {hasChildren&&<span className="tree-count">{node.children.length}</span>}
+        </div>
+        {hasChildren&&!closed&&node.children.map(child=>renderNode(child,level+1))}
+      </Fragment>
+    );
+  };
   return <div className="executor-inspector">
     <div className="executor-toolbar"><ExecutorSelect executors={executors} value={selected} onChange={setSelected}/>
       <button className="btn bg" onClick={onRefresh}>Refresh</button></div>
@@ -1275,9 +1441,7 @@ function TreeInspector({snapshot,onRefresh}){
     <div className="tree-nodes">
       {!exec&&<div className="executor-meta">No live Executors.</div>}
       {exec&&exec.nodes.length===0&&<div className="executor-meta">This Executor has no Tree nodes.</div>}
-      {exec?.nodes.map(node=><div className="tree-node" key={node.id} style={{paddingLeft:10+node.depth*16}} title={node.path}>
-        <span className="tree-label">{node.label||'/'}</span><span className="tree-type">{node.type} #{node.id}</span>
-      </div>)}
+      {tree.map(node=>renderNode(node))}
     </div>
   </div>;
 }
@@ -1298,7 +1462,7 @@ function DebugInspector({snapshot,onRefresh,onAction,output}){
   </div>;
 }
 
-function KaiConsolePanel({view,rhoMirror,onMirrorChange}){
+function KaiConsolePanel({view,rhoMirror,onMirrorChange,piDraft,onConsumePiDraft,onPasteContinuation}){
   const title=view==='debugger'?'Debugger':view==='tree'?'Tree':view==='rho'?'Rho':'Pi';
   const prompt=view==='rho'?'ρ>':'π>';
   const [output,setOutput]=useState('');
@@ -1369,6 +1533,12 @@ function KaiConsolePanel({view,rhoMirror,onMirrorChange}){
     else if(event.key==='ArrowUp'){event.preventDefault();const i=Math.min(hi+1,hist.length-1);setHi(i);setInp(hist[i]||'');}
     else if(event.key==='ArrowDown'){event.preventDefault();const i=Math.max(hi-1,-1);setHi(i);setInp(i<0?'':hist[i]);}
   };
+  useEffect(()=>{
+    if(view!=='pi'||!piDraft)return;
+    setInp(piDraft);
+    setHi(-1);
+    onConsumePiDraft?.();
+  },[view,piDraft,onConsumePiDraft]);
 
   return(
     <div className="kai-panel">
@@ -1378,7 +1548,7 @@ function KaiConsolePanel({view,rhoMirror,onMirrorChange}){
         <button className="btn bg" style={{fontSize:10,padding:'3px 7px'}} onClick={()=>setOutput('')}>Clear</button>
         <span className={status==='connected'?'on':'off'}>{status}</span>
       </div>
-      {view==='tree' ? <TreeInspector snapshot={treeSnapshot} onRefresh={refreshExecutors}/>
+      {view==='tree' ? <TreeInspector snapshot={treeSnapshot} onRefresh={refreshExecutors} onPasteContinuation={onPasteContinuation}/>
       : view==='debugger' ? <DebugInspector snapshot={treeSnapshot} onRefresh={refreshExecutors} onAction={debugAction} output={output}/>
       : view==='rho' ? (
         <RhoEditorPanel
@@ -1396,11 +1566,19 @@ function KaiConsolePanel({view,rhoMirror,onMirrorChange}){
               {rhoMirror}
             </div>
           )}
+          {view==='pi' && (
+            <div className="pi-op-bar">
+              {PI_STACK_OPS.map(op=>(
+                <button key={op.word} className="btn bg" title={op.title} onClick={()=>run(op.word)}>
+                  {op.word}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="kai-out" ref={outRef}><AnsiOutput text={output||`Starting CppKAI ${title}…\n`} mode={view}/></div>
         <div className="kai-input">
           <span style={{color:'var(--accent)',fontFamily:'var(--mono)'}}>{prompt}</span>
           <input value={inp} onChange={e=>setInp(e.target.value)} onKeyDown={onKey} disabled={status!=='connected'} placeholder="2 3 +"/>
-          <button className="btn bp" style={{fontSize:10,padding:'5px 8px'}} onClick={()=>run(inp)} disabled={status!=='connected'||!inp.trim()}>Run</button>
         </div>
         </>
       )}
@@ -2498,6 +2676,7 @@ function App() {
   const [rightWidth, setRightWidth] = useState(() => Number(localStorage.getItem('glm-right-width')) || 520);
   const [resizing, setResizing] = useState(false);
   const [rhoMirror, setRhoMirror] = useState('');
+  const [piDraft, setPiDraft] = useState('');
   const [cwd, setCwd]             = useState('');
   const [viewFile, setViewFile]   = useState(null);
   const [models, setModels]       = useState([]);
@@ -2638,6 +2817,10 @@ function App() {
     setInj(fp);
     setRtab('bash');
   };
+  const pasteContinuationToPi = value => {
+    setPiDraft(value);
+    setRtab('pi');
+  };
 
   const resizeRight = (event) => {
     event.preventDefault();
@@ -2706,7 +2889,14 @@ function App() {
           </div>
           <div className="main">
             {rtab === 'bash' && <ReplPanel cwd={cwd} onCwdChange={setCwd}/>}
-            {rtab !== 'bash' && <KaiConsolePanel view={rtab} rhoMirror={rhoMirror} onMirrorChange={setRhoMirror}/>}
+            {rtab !== 'bash' && <KaiConsolePanel
+              view={rtab}
+              rhoMirror={rhoMirror}
+              onMirrorChange={setRhoMirror}
+              piDraft={piDraft}
+              onConsumePiDraft={()=>setPiDraft('')}
+              onPasteContinuation={pasteContinuationToPi}
+            />}
           </div>
         </div>
       </div>

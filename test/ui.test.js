@@ -38,6 +38,38 @@ test('Ace Vim ex commands support q, wq, and substitute',()=>{
   assert.match(html,/close:\(\)=>onClose\(\)/);
 });
 
+test('tree inspector renders explorer branches and continuation paste support',()=>{
+  assert.match(html,/function buildTreeExplorer\(nodes\)/);
+  assert.match(html,/function treeNodeSummary\(node, exec\)/);
+  assert.match(html,/function getContinuationPasteText\(node\)/);
+  assert.match(html,/function isContinuationNode\(node\)/);
+  assert.match(html,/className=\{branchClass\}/);
+  assert.match(html,/title=\{treeNodeSummary\(node,exec\)\}/);
+  assert.match(html,/className="tree-toggle"/);
+  assert.match(html,/className="tree-count"/);
+  assert.match(html,/onDoubleClick=\{isContinuationNode\(node\)&&pasteText\?\(\)=>onPasteContinuation\?\.\(pasteText\):undefined\}/);
+  assert.match(html,/Double-click to paste to Pi/);
+  assert.match(html,/const \[piDraft, setPiDraft\] = useState\(''\)/);
+  assert.match(html,/setPiDraft\(value\);/);
+  assert.match(html,/setRtab\('pi'\)/);
+  assert.match(html,/setInp\(piDraft\)/);
+  assert.match(html,/onPasteContinuation=\{pasteContinuationToPi\}/);
+});
+
+test('Pi panel stack buttons execute immediately and do not use a Run button',()=>{
+  assert.match(html,/const PI_STACK_OPS = \[/);
+  assert.match(html,/word:'dup'/);
+  assert.match(html,/word:'swap'/);
+  assert.match(html,/word:'drop'/);
+  assert.match(html,/word:'rot'/);
+  assert.match(html,/word:'roll'/);
+  assert.match(html,/word:'over'/);
+  assert.match(html,/word:'depth'/);
+  assert.match(html,/className="pi-op-bar"/);
+  assert.match(html,/onClick=\{\(\)=>run\(op\.word\)\}/);
+  assert.doesNotMatch(html,/onClick=\{\(\)=>run\(inp\)\} disabled=\{status!=='connected'\|\|!inp\.trim\(\)\}>Run<\/button>/);
+});
+
 test('README Mermaid diagrams avoid fragile renderer syntax',()=>{
   const diagrams=[...readme.matchAll(/```mermaid\n([\s\S]*?)\n```/g)].map(match=>match[1]);
   assert.equal(diagrams.length,4);
@@ -390,7 +422,7 @@ test('index.html exposes the right-side Bash and KAI buttons',()=>{
   assert.match(html,/Rho/);
   assert.match(html,/Debug/);
   assert.match(html,/right-resizer/);
-  assert.match(html,/KaiConsolePanel view=\{rtab\}/);
+  assert.match(html,/KaiConsolePanel[\s\S]*?view=\{rtab\}/);
   assert.match(html,/\['bash','pi','rho','debugger','tree'\]/);
   assert.match(html,/WebSocket\(API\.replace\(/);
 });
@@ -417,7 +449,14 @@ test('Executor inspection and debugging use KAI logging',()=>{
 test('Pi output omits native prompt numbering but preserves stack indices',()=>{
   assert.match(html,/line=line\.replace\(\/\\\[\\d\+\\\]\\s\*\//);
   assert.doesNotMatch(html,/line=line\.replace\(\/\\\[\\d\+\\\]:\\s\*\//);
-  assert.match(html,/mode==='pi'&&visible==='π'/);
+  assert.match(html,/function normalizeKaiIndices\(text,mode\)/);
+  assert.match(html,/if\(mode!=='pi'\)\{/);
+  assert.match(html,/stackVisiblePattern=\/\^\\\[\\d\+\\\]:\?/);
+  assert.match(html,/const rewriteStackLine=\(line,index\)=>/);
+  assert.match(html,/stackBlock\.slice\(\)\.reverse\(\)\.forEach/);
+  assert.match(html,/stackBlock\.length-1-i/);
+  assert.match(html,/if\(stackVisiblePattern\.test\(visible\)\)\{/);
+  assert.match(html,/if\(\/\^\\\[\\d\+\\\]:\?\/\.test\(token\)\)return PI_TOKEN_STYLES\.stack;/);
 });
 
 test('Pi output receives semantic token colours when native ANSI is absent',()=>{
@@ -425,10 +464,10 @@ test('Pi output receives semantic token colours when native ANSI is absent',()=>
   assert.match(html,/function piTokenStyle\(token\)/);
   assert.match(html,/function renderPiTokens\(text,baseStyle,keyStart\)/);
   assert.match(html,/if\(mode==='pi'&&!style\.color\)/);
-  assert.match(html,/\^\\\[\\d\+\\\]:\?\$/);
-  assert.match(html,/\^\[πρλ\$\]\$/);
+  assert.match(html,/if\(\/\^\\\[\\d\+\\\]:\?\/\.test\(token\)\)return PI_TOKEN_STYLES\.stack;/);
+  assert.match(html,/\\\[\\d\+\\\]:\?/);
   assert.ok(html.includes("if(/^-?\\d+(?:\\.\\d+)?$/.test(token))return PI_TOKEN_STYLES.number;"));
-  assert.match(html,/\^\(true\|false\)\$/);
+  assert.match(html,/true\|false\|nil\|null/);
 });
 
 test('file browser hides dotfiles by default',()=>{
