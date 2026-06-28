@@ -9,21 +9,21 @@ consoles in one page.
 
 ```mermaid
 flowchart LR
-    Browser["Browser UI<br/>React + Ace"]
-    Server["Node server<br/>Express + WebSocket bridge"]
-    Model["OpenAI-compatible endpoint<br/>Ollama, SGLang, or vLLM"]
-    Files["Workspace files<br/>under SAFE_ROOT"]
-    Memory["Fact memory<br/>.nodeglm-memory.json"]
+    Browser["Browser UI (React + Ace)"]
+    Server["Node server (Express + WebSocket bridge)"]
+    Model["OpenAI-compatible endpoint (Ollama, SGLang, or vLLM)"]
+    Files["Workspace files under SAFE_ROOT"]
+    Memory["Fact memory file"]
     Shell["Bash subprocesses"]
-    Kai["CppKAI runtime<br/>Pi, Rho, Debug, Tree"]
+    Kai["CppKAI runtime (Pi, Rho, Debug, Tree)"]
 
-    Browser <-->|"HTTP, SSE"| Server
-    Browser <-->|"WebSocket /api/kai"| Server
-    Server <-->|"/v1/models<br/>/v1/chat/completions"| Model
-    Server <-->|"validated paths"| Files
-    Server <-->|"read/write learned facts"| Memory
-    Server <-->|"commands"| Shell
-    Server <-->|"pseudo-terminal"| Kai
+    Browser <-->|HTTP and SSE| Server
+    Browser <-->|WebSocket api/kai| Server
+    Server <-->|models and chat completions| Model
+    Server <-->|validated paths| Files
+    Server <-->|read and write learned facts| Memory
+    Server <-->|commands| Shell
+    Server <-->|pseudo-terminal| Kai
 ```
 
 The browser has no direct filesystem access. `server.js` validates file paths,
@@ -145,7 +145,7 @@ browser transcript and the persisted fact file.
 flowchart TD
     UserMsg["User message"] --> Extract["Extract explicit facts"]
     Extract --> Dedupe["Normalize and deduplicate"]
-    Dedupe --> Store["Persist under SAFE_ROOT<br/>.nodeglm-memory.json"]
+    Dedupe --> Store["Persist fact memory under SAFE_ROOT"]
     Store --> Session["Refresh session memory"]
     Session --> Prompt["Build memory system message"]
     Prompt --> Model["OpenAI-compatible chat completion"]
@@ -173,7 +173,7 @@ is authoritative model context; shell-shaped requests such as `cd`, `pwd`, and
 
 ```mermaid
 sequenceDiagram
-    actor User
+    participant User
     participant UI as Browser UI
     participant API as Node server
     participant LLM as Model endpoint
@@ -215,7 +215,7 @@ flowchart TB
     Check -->|Yes| Operation["Read, preview, or write"]
     Check -->|No| Reject["Reject: Outside sandbox"]
 
-    Root["SAFE_ROOT"] -. bounds .-> Check
+    Root["SAFE_ROOT boundary"] -.-> Check
 ```
 
 Agent file reads are limited to 4 MB, browser file reads to 2 MB, and JSON

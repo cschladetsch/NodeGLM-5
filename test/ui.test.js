@@ -7,6 +7,7 @@ const html=fs.readFileSync(path.join(__dirname,'..','index.html'),'utf8');
 const launcher=fs.readFileSync(path.join(__dirname,'..','s'),'utf8');
 const windowLauncher=fs.readFileSync(path.join(__dirname,'..','Scripts','open-app-window.sh'),'utf8');
 const server=fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8');
+const readme=fs.readFileSync(path.join(__dirname,'..','Readme.md'),'utf8');
 const uiConfig=JSON.parse(fs.readFileSync(path.join(__dirname,'..','ui-config.json'),'utf8'));
 const kaiConsole=fs.readFileSync(path.join(__dirname,'..','Ext','CppKAI','Ext','CppKaiCore','Source','Library','Executor','Source','Console.cpp'),'utf8');
 const kaiMain=fs.readFileSync(path.join(__dirname,'..','Ext','CppKAI','Source','App','Console','Source','Main.cpp'),'utf8');
@@ -22,6 +23,18 @@ test('Ace editor enables Monokai, Vim, and a save command',()=>{
   assert.match(html,/editor\.setKeyboardHandler\('ace\/keyboard\/vim'\)/);
   assert.match(html,/name:'saveFile'/);
   assert.match(html,/win:'Ctrl-S',mac:'Command-S'/);
+});
+
+test('README Mermaid diagrams avoid fragile renderer syntax',()=>{
+  const diagrams=[...readme.matchAll(/```mermaid\n([\s\S]*?)\n```/g)].map(match=>match[1]);
+  assert.equal(diagrams.length,4);
+  for(const diagram of diagrams){
+    assert.doesNotMatch(diagram,/<br\s*\/?>/i);
+    assert.doesNotMatch(diagram,/\s-\.\s+[^"]+?\s+\.-?>/);
+    assert.doesNotMatch(diagram,/^actor\s/im);
+  }
+  assert.match(diagrams[0],/flowchart LR/);
+  assert.match(diagrams[2],/sequenceDiagram/);
 });
 
 test('C and C++ extensions map to the Ace C++ mode',()=>{
