@@ -7,6 +7,3 @@
 [submodule "Ext/ENet"]
 	path = Ext/ENet
 	url = https://github.com/lsalzman/enet.git
-[submodule "Ext/JsCustomVi"]
-	path = Ext/JsCustomVi
-	url = /home/christian/local/repos/JsCustomVi
