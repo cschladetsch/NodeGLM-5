@@ -105,10 +105,12 @@ test('chat persists bounded conversation memory in local storage',()=>{
 });
 
 test('chat memory validates stored messages and excludes transient request state',()=>{
+  assert.match(html,/function stableChatMessages/);
   assert.match(html,/\['user','assistant'\]\.includes\(message\.role\)/);
   assert.match(html,/typeof message\.content==='string'/);
-  assert.match(html,/messages\.filter\(message => !message\.requestPending && message\.content\)/);
-  assert.match(html,/\{requestPending,startedAt,\.\.\.message\}/);
+  assert.match(html,/!message\.requestPending/);
+  assert.match(html,/\{requestPending,startedAt,thinking,\.\.\.message\}/);
+  assert.match(html,/const stable=stableChatMessages\(messages\)\.filter\(message => message\.content\)/);
   assert.match(html,/catch \{[\s\S]*?return INITIAL_CHAT_MESSAGES/);
 });
 
@@ -147,15 +149,26 @@ test('chat exposes a guarded clear-memory control',()=>{
 test('chat displays and refreshes learned fact memory',()=>{
   assert.match(html,/const \[memoryFacts, setMemoryFacts\] = useState\(\[\]\)/);
   assert.match(html,/const \[memoryEditorOpen, setMemoryEditorOpen\] = useState\(false\)/);
+  assert.match(html,/const \[chatHistoryEditorOpen, setChatHistoryEditorOpen\] = useState\(false\)/);
   assert.match(html,/api\/memory\?sid=/);
   assert.match(html,/method:'PUT'/);
   assert.match(html,/Stored Facts/);
   assert.match(html,/Vim · one fact per line/);
+  assert.match(html,/Message History/);
+  assert.match(html,/Vim · JSON array/);
+  assert.match(html,/ace\/mode\/json/);
+  assert.match(html,/Message history must be a JSON array/);
+  assert.match(html,/localStorage\.setItem\(CHAT_MEMORY_KEY,JSON\.stringify\(next\)\)/);
   assert.match(html,/className="chat-memory-link"/);
   assert.match(html,/initialFacts=\{memoryFacts\}/);
+  assert.match(html,/messages=\{messages\}/);
+  assert.match(html,/onSaved=\{setMessages\}/);
+  assert.match(html,/setChatHistoryEditorOpen\(true\)/);
   assert.match(html,/fallbackFacts\.join\('\\n'\)/);
+  assert.match(html,/function stableChatMessages/);
   assert.match(html,/loadMemoryFacts\(\)/);
   assert.match(html,/memoryFacts\.length/);
+  assert.match(html,/messages\.length/);
   assert.match(html,/if\(!open\)\{[\s\S]*?aceRef\.current\?\.destroy\(\)/);
   assert.match(html,/editor&&editor\.container!==editorEl\.current/);
   assert.match(server,/extractMemoryFacts/);
@@ -313,6 +326,17 @@ test('Pi output omits native prompt numbering but preserves stack indices',()=>{
   assert.match(html,/line=line\.replace\(\/\\\[\\d\+\\\]\\s\*\//);
   assert.doesNotMatch(html,/line=line\.replace\(\/\\\[\\d\+\\\]:\\s\*\//);
   assert.match(html,/mode==='pi'&&visible==='π'/);
+});
+
+test('Pi output receives semantic token colours when native ANSI is absent',()=>{
+  assert.match(html,/const PI_TOKEN_STYLES=/);
+  assert.match(html,/function piTokenStyle\(token\)/);
+  assert.match(html,/function renderPiTokens\(text,baseStyle,keyStart\)/);
+  assert.match(html,/if\(mode==='pi'&&!style\.color\)/);
+  assert.match(html,/\^\\\[\\d\+\\\]:\?\$/);
+  assert.match(html,/\^\[πρλ\$\]\$/);
+  assert.ok(html.includes("if(/^-?\\d+(?:\\.\\d+)?$/.test(token))return PI_TOKEN_STYLES.number;"));
+  assert.match(html,/\^\(true\|false\)\$/);
 });
 
 test('file browser hides dotfiles by default',()=>{

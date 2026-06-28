@@ -790,13 +790,17 @@ const CHAT_MEMORY_KEY = 'nodeglm-chat-memory-v1';
 const CHAT_MEMORY_LIMIT = 100;
 const INITIAL_CHAT_MESSAGES = [{role:'assistant',content:'How can I help?'}];
 
+function stableChatMessages(messages) {
+  return (Array.isArray(messages) ? messages : [])
+    .filter(message => message && !message.requestPending && ['user','assistant'].includes(message.role) && typeof message.content==='string')
+    .slice(-CHAT_MEMORY_LIMIT)
+    .map(({requestPending,startedAt,thinking,...message}) => message);
+}
+
 function loadChatMemory() {
   try {
     const saved=JSON.parse(localStorage.getItem(CHAT_MEMORY_KEY));
-    if(!Array.isArray(saved))return INITIAL_CHAT_MESSAGES;
-    const valid=saved.filter(message =>
-      message && ['user','assistant'].includes(message.role) && typeof message.content==='string'
-    ).slice(-CHAT_MEMORY_LIMIT);
+    const valid=stableChatMessages(saved);
     return valid.length ? valid : INITIAL_CHAT_MESSAGES;
   } catch {
     return INITIAL_CHAT_MESSAGES;
@@ -804,8 +808,7 @@ function loadChatMemory() {
 }
 
 function saveChatMemory(messages) {
-  const stable=messages.filter(message => !message.requestPending && message.content).slice(-CHAT_MEMORY_LIMIT)
-    .map(({requestPending,startedAt,...message}) => message);
+  const stable=stableChatMessages(messages).filter(message => message.content);
   try { localStorage.setItem(CHAT_MEMORY_KEY,JSON.stringify(stable)); }
   catch(error) { console.error('Failed to save chat memory:',error); }
 }
@@ -1116,6 +1119,15 @@ const ANSI_FG={
   90:'#777792',91:'#ff7777',92:'#55e6b3',93:'#ffd27a',94:'#88bbff',95:'#da8bec',96:'#79e5eb',97:'#ffffff'
 };
 const ANSI_BG={40:'#0a0a0d',41:'#5a2020',42:'#164a39',43:'#55451d',44:'#203858',45:'#482451',46:'#17484d',47:'#d0d0dc'};
+const PI_TOKEN_STYLES={
+  stack:{color:'#ffd27a',fontWeight:700},
+  prompt:{color:'#56d4dd',fontWeight:700},
+  string:{color:'#55e6b3'},
+  number:{color:'#f0c060'},
+  boolean:{color:'#da8bec'},
+  operator:{color:'#88bbff'},
+  null:{color:'#777792',fontStyle:'italic'}
+};
 
 function normalizeKaiIndices(text,mode){
   const sgr='(?:\\u001b\\[[0-9;]*m)*';
@@ -1128,11 +1140,46 @@ function normalizeKaiIndices(text,mode){
   }).join('\n');
 }
 
+function piTokenStyle(token){
+  if(/^\[\d+\]:?$/.test(token))return PI_TOKEN_STYLES.stack;
+  if(/^[πρλ$]$/.test(token))return PI_TOKEN_STYLES.prompt;
+  if(/^"/.test(token))return PI_TOKEN_STYLES.string;
+  if(/^(true|false)$/.test(token))return PI_TOKEN_STYLES.boolean;
+  if(/^(nil|null)$/.test(token))return PI_TOKEN_STYLES.null;
+  if(/^-?\d+(?:\.\d+)?$/.test(token))return PI_TOKEN_STYLES.number;
+  if(/^[+\-*\/=<>!&|]+$/.test(token))return PI_TOKEN_STYLES.operator;
+  return null;
+}
+
+function renderPiTokens(text,baseStyle,keyStart){
+  const tokenPattern=/(\[\d+\]:?|[πρλ$](?=\s|$)|"(?:\\.|[^"\\])*"|\b(?:true|false|nil|null)\b|-?\d+(?:\.\d+)?|[+\-*\/=<>!&|]+)/g;
+  const nodes=[];
+  let offset=0,match,key=keyStart;
+  while((match=tokenPattern.exec(text))){
+    if(match.index>offset)nodes.push(<span key={key++} style={{...baseStyle}}>{text.slice(offset,match.index)}</span>);
+    const token=match[0];
+    nodes.push(<span key={key++} style={{...baseStyle,...piTokenStyle(token)}}>{token}</span>);
+    offset=tokenPattern.lastIndex;
+  }
+  if(offset<text.length)nodes.push(<span key={key++} style={{...baseStyle}}>{text.slice(offset)}</span>);
+  return {nodes,key};
+}
+
 function AnsiOutput({text,mode}){
   const source=normalizeKaiIndices(text.replace(/\u001b\[[0-?]*[ -/]*([@-~])/g,(seq,final)=>final==='m'?seq:''),mode);
   const parts=[];const pattern=/\u001b\[([0-9;]*)m/g;
   let style={},offset=0,match,key=0;
-  const append=end=>{if(end>offset)parts.push(<span key={key++} style={{...style}}>{source.slice(offset,end)}</span>);};
+  const append=end=>{
+    if(end<=offset)return;
+    const chunk=source.slice(offset,end);
+    if(mode==='pi'&&!style.color){
+      const rendered=renderPiTokens(chunk,style,key);
+      parts.push(...rendered.nodes);
+      key=rendered.key;
+    }else{
+      parts.push(<span key={key++} style={{...style}}>{chunk}</span>);
+    }
+  };
   while((match=pattern.exec(source))){
     append(match.index);offset=pattern.lastIndex;
     const codes=(match[1]||'0').split(';').map(Number);
@@ -1636,6 +1683,114 @@ function MemoryFactsEditor({open,initialFacts=[],onClose,onSaved}) {
   );
 }
 
+function ChatHistoryEditor({open,messages=[],onClose,onSaved}) {
+  const [text,setText] = useState('');
+  const [saving,setSaving] = useState(false);
+  const [error,setError] = useState('');
+  const [notice,setNotice] = useState('');
+  const editorEl = useRef(null);
+  const aceRef = useRef(null);
+  const suppressChange = useRef(false);
+  const saveRef = useRef(null);
+
+  const formatMessages = value => JSON.stringify(stableChatMessages(value), null, 2);
+
+  useEffect(() => {
+    if(!open)return;
+    setText(formatMessages(messages));
+    setSaving(false); setError(''); setNotice('');
+  }, [open]);
+
+  const save = () => {
+    if(saving)return;
+    const editor=aceRef.current;
+    const raw=editor ? editor.getValue() : text;
+    setSaving(true); setError(''); setNotice('');
+    try{
+      const parsed=JSON.parse(raw);
+      if(!Array.isArray(parsed))throw new Error('Message history must be a JSON array');
+      const next=stableChatMessages(parsed);
+      if(!next.length)throw new Error('Message history must contain at least one user or assistant message');
+      localStorage.setItem(CHAT_MEMORY_KEY,JSON.stringify(next));
+      const nextText=JSON.stringify(next,null,2);
+      setText(nextText); setNotice('Saved'); onSaved?.(next);
+      if(editor&&editor.getValue()!==nextText){
+        suppressChange.current=true;
+        editor.setValue(nextText,-1);
+        editor.clearSelection();
+        suppressChange.current=false;
+      }
+    }catch(error){
+      setError(error.message);
+    }finally{
+      setSaving(false);
+    }
+  };
+  saveRef.current=save;
+
+  useLayoutEffect(() => {
+    if(!open){
+      aceRef.current?.destroy();
+      aceRef.current=null;
+      return;
+    }
+    if(!editorEl.current)return;
+    let editor=aceRef.current;
+    if(editor&&editor.container!==editorEl.current){
+      editor.destroy();
+      aceRef.current=null;
+      editor=null;
+    }
+    if(!editor){
+      editor=ace.edit(editorEl.current);
+      aceRef.current=editor;
+      editor.setTheme('ace/theme/monokai');
+      editor.setKeyboardHandler('ace/keyboard/vim');
+      editor.setOptions({fontSize:'13px',showPrintMargin:false,useWorker:false});
+      editor.session.setMode('ace/mode/json');
+      editor.session.on('change',()=>{if(!suppressChange.current){setText(editor.getValue());setNotice('');}});
+      editor.commands.addCommand({name:'saveChatHistory',bindKey:{win:'Ctrl-S',mac:'Command-S'},exec:()=>saveRef.current?.()});
+    }
+    if(editor.getValue()!==text){
+      suppressChange.current=true;
+      editor.setValue(text,-1);
+      editor.clearSelection();
+      suppressChange.current=false;
+    }
+    editor.setOptions({readOnly:saving});
+    requestAnimationFrame(()=>{
+      editor.resize(true);
+      editor.renderer.updateFull();
+      editor.focus();
+    });
+  }, [open,text,saving]);
+
+  useEffect(() => () => { aceRef.current?.destroy(); aceRef.current=null; }, []);
+
+  if(!open)return null;
+  const count=stableChatMessages(messages).length;
+  return (
+    <div className="memory-editor-backdrop" role="dialog" aria-modal="true" aria-label="Chat history editor">
+      <div className="memory-editor">
+        <div className="memory-editor-head">
+          <strong>Message History</strong>
+          <span>Vim · JSON array</span>
+          <span style={{flex:1}}>{count} message{count===1?'':'s'}</span>
+          {error && <span className="memory-editor-status" style={{color:'var(--warn)'}}>{error}</span>}
+          {notice && <span className="memory-editor-status" style={{color:'var(--accent2)'}}>{notice}</span>}
+          <button className="btn btn-primary" style={{fontSize:11,padding:'4px 10px'}}
+            onClick={save} disabled={saving}>{saving?'Saving...':'Save'}</button>
+          <button className="btn btn-ghost" style={{fontSize:11,padding:'4px 10px'}}
+            onClick={onClose} disabled={saving}>Close</button>
+        </div>
+        <div className="memory-editor-body">
+          <div ref={editorEl} className="memory-editor-ace"/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
   const [messages, setMessages] = useState(loadChatMemory);
   const [input, setInput] = useState('');
@@ -1645,6 +1800,7 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
   const [progressDelaySeconds, setProgressDelaySeconds] = useState(3);
   const [memoryFacts, setMemoryFacts] = useState([]);
   const [memoryEditorOpen, setMemoryEditorOpen] = useState(false);
+  const [chatHistoryEditorOpen, setChatHistoryEditorOpen] = useState(false);
   const messagesEndRef = useRef(null);
   const taRef = useRef(null);
   const abortRef = useRef(null);
@@ -1924,6 +2080,12 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
         onClose={()=>setMemoryEditorOpen(false)}
         onSaved={setMemoryFacts}
       />
+      <ChatHistoryEditor
+        open={chatHistoryEditorOpen}
+        messages={messages}
+        onClose={()=>setChatHistoryEditorOpen(false)}
+        onSaved={setMessages}
+      />
       <div className="chat-messages">
         {messages.map((msg, i) => (
           <div key={msg.id||i} className={`msg ${msg.role}`}>
@@ -1982,7 +2144,12 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
 
       <div className="chat-input-area">
         <div className="chat-memory-bar">
-          <span>Memory: {messages.length} message{messages.length===1?'':'s'}, </span>
+          <span>Memory: </span>
+          <button className="chat-memory-link" onClick={()=>setChatHistoryEditorOpen(true)}
+            disabled={streaming||Boolean(pendingAction)}>
+            {messages.length} message{messages.length===1?'':'s'}
+          </button>
+          <span>, </span>
           <button className="chat-memory-link" onClick={()=>setMemoryEditorOpen(true)}
             disabled={streaming||Boolean(pendingAction)}>
             {memoryFacts.length} fact{memoryFacts.length===1?'':'s'}

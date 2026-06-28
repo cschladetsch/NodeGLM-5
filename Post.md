@@ -19,6 +19,9 @@ The current workspace includes:
 - a filesystem browser, Chat Box, and Bash REPL with a shared working directory;
 - explicit fact memory for details like the user's name, preferences, and other
   user-provided facts;
+- an editable stored-facts view from the chat footer;
+- a repo-level `run_tests.sh` that installs dependencies when needed, builds
+  when a build script exists, and runs the full test suite;
 - per-session model selection; and
 - a persistent CppKAI runtime with Pi and Rho consoles plus executor-attached
   Debug and Tree panels.
@@ -37,6 +40,10 @@ matter.
 I have also brought the project documentation up to date with Mermaid diagrams
 covering the architecture, fact memory, agent approval sequence, and
 path-validation flow.
+
+The current test path is intentionally boring: `./run_tests.sh` is the single
+entry point for local verification, including dependency refresh, optional
+build, and the Node test suite.
 
 ```mermaid
 flowchart LR
