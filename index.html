@@ -1449,6 +1449,12 @@ function VimEditorInput({value,onChange,onRun,placeholder='enter text…',disabl
         exec:()=>onRun?.(editor.getValue()),
       });
     }
+    bindAceVimExActions(editor,{
+      save:()=>onRun?.(editor.getValue()),
+      close:()=>editor.blur(),
+      run:()=>onRun?.(editor.getValue()),
+      isDirty:()=>false,
+    });
     if(editor.getValue()!==valueRef.current){
       editor.setValue(valueRef.current,-1);
       editor.clearSelection();
@@ -1502,6 +1508,142 @@ function aceMode(filePath) {
   return modes[ext]||'text';
 }
 
+function getAceVimApi() {
+  try {
+    return ace.require('ace/keyboard/vim')?.CodeMirror?.Vim || null;
+  } catch {
+    return null;
+  }
+}
+
+function installAceVimExCommands() {
+  const Vim = getAceVimApi();
+  if (!Vim || Vim.__nodeglmExCommandsInstalled) return Vim;
+
+  const define = (name, handler) => {
+    if (typeof Vim.defineEx === 'function') {
+      Vim.defineEx(name, name, handler);
+    }
+  };
+
+  const splitExArgs = (text, delimiter, limit) => {
+    const parts = [];
+    let chunk = '';
+    let escape = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (escape) {
+        chunk += ch;
+        escape = false;
+        continue;
+      }
+      if (ch === '\\') {
+        chunk += ch;
+        escape = true;
+        continue;
+      }
+      if (ch === delimiter && parts.length < limit - 1) {
+        parts.push(chunk);
+        chunk = '';
+        continue;
+      }
+      chunk += ch;
+    }
+    parts.push(chunk);
+    return parts;
+  };
+
+  const parseSubstitute = input => {
+    const text = String(input || '').trim();
+    const range = text.startsWith('%') ? '%' : '';
+    const spec = range ? text.slice(1).trimStart() : text;
+    if (!spec.startsWith('s') || spec.length < 2) return null;
+    const delimiter = spec[1];
+    if (!delimiter || /\s/.test(delimiter)) return null;
+    const parts = splitExArgs(spec.slice(2), delimiter, 3);
+    if (parts.length < 3) return null;
+    return {
+      range,
+      pattern: parts[0],
+      replacement: parts[1],
+      flags: parts[2].trim(),
+    };
+  };
+
+  const applySubstitute = (editor, input) => {
+    const spec = parseSubstitute(input);
+    if (!spec) return Promise.resolve();
+    const source = String(editor?.getValue?.() || '');
+    const lines = source.split('\n');
+    const cursorRow = Math.max(0, editor?.getCursorPosition?.()?.row || 0);
+    const targetRows = spec.range === '%'
+      ? lines.map((_, index) => index)
+      : [Math.min(cursorRow, Math.max(0, lines.length - 1))];
+    let regex;
+    try {
+      regex = new RegExp(spec.pattern, spec.flags.includes('i') ? 'gi' : 'g');
+    } catch {
+      return Promise.resolve();
+    }
+    const useGlobal = spec.flags.includes('g');
+    let changed = false;
+    for (const row of targetRows) {
+      const before = lines[row] || '';
+      const after = useGlobal ? before.replace(regex, spec.replacement) : before.replace(regex, spec.replacement);
+      if (after !== before) {
+        lines[row] = after;
+        changed = true;
+      }
+    }
+    if (changed) editor?.setValue?.(lines.join('\n'), -1);
+    return Promise.resolve();
+  };
+
+  const run = (cm, action, input) => {
+    const editor = cm?._nodeglmEditor || cm?.editor || cm;
+    const ex = editor?._nodeglmExActions || {};
+    const invoke = fn => (typeof fn === 'function' ? Promise.resolve(fn(editor, input)) : Promise.resolve());
+    const close = () => invoke(ex.close);
+    const save = () => invoke(ex.save);
+
+    switch (action) {
+      case 'write':
+        return save();
+      case 'wq':
+        return save().then(() => close());
+      case 'x':
+        return (typeof ex.isDirty === 'function' && ex.isDirty(editor, input) ? save() : Promise.resolve()).then(() => close());
+      case 'quit':
+      case 'close':
+      case 'q!':
+        return close();
+      case 'substitute':
+        return applySubstitute(editor, input);
+      default:
+        return Promise.resolve();
+    }
+  };
+
+  define('q', (cm, input) => run(cm, 'quit', input));
+  define('q!', (cm, input) => run(cm, 'q!', input));
+  define('w', (cm, input) => run(cm, 'write', input));
+  define('write', (cm, input) => run(cm, 'write', input));
+  define('wq', (cm, input) => run(cm, 'wq', input));
+  define('x', (cm, input) => run(cm, 'x', input));
+  define('s', (cm, input) => run(cm, 'substitute', input));
+  define('substitute', (cm, input) => run(cm, 'substitute', input));
+
+  Vim.__nodeglmExCommandsInstalled = true;
+  return Vim;
+}
+
+function bindAceVimExActions(editor, actions) {
+  if (!editor) return;
+  installAceVimExCommands();
+  editor._nodeglmEditor = editor;
+  editor._nodeglmExActions = actions || {};
+}
+
 // ── File editor panel ───────────────────────────────────────────────────────
 function FileViewerPanel({ filePath, onClose }) {
   const [content, setContent] = useState(null);
@@ -1553,6 +1695,11 @@ function FileViewerPanel({ filePath, onClose }) {
       editor.session.on('change',()=>{if(!suppressChange.current){setDirty(true);setNotice('');}});
       editor.commands.addCommand({name:'saveFile',bindKey:{win:'Ctrl-S',mac:'Command-S'},exec:()=>saveRef.current?.()});
     }
+    bindAceVimExActions(editor,{
+      save:()=>saveRef.current?.(),
+      close:()=>onClose(),
+      isDirty:()=>dirty,
+    });
     suppressChange.current=true;
     editor.session.setMode(`ace/mode/${aceMode(filePath)}`);
     editor.setValue(content,-1);
@@ -1697,6 +1844,11 @@ function MemoryFactsEditor({open,initialFacts=[],onClose,onSaved}) {
       editor.session.on('change',()=>{if(!suppressChange.current){setText(editor.getValue());setNotice('');}});
       editor.commands.addCommand({name:'saveMemoryFacts',bindKey:{win:'Ctrl-S',mac:'Command-S'},exec:()=>saveRef.current?.()});
     }
+    bindAceVimExActions(editor,{
+      save:()=>saveRef.current?.(),
+      close:()=>onClose(),
+      isDirty:()=>editor?.getValue()!==text,
+    });
     if(editor.getValue()!==text){
       suppressChange.current=true;
       editor.setValue(text,-1);
@@ -1805,6 +1957,11 @@ function ChatHistoryEditor({open,messages=[],onClose,onSaved}) {
       editor.session.on('change',()=>{if(!suppressChange.current){setText(editor.getValue());setNotice('');}});
       editor.commands.addCommand({name:'saveChatHistory',bindKey:{win:'Ctrl-S',mac:'Command-S'},exec:()=>saveRef.current?.()});
     }
+    bindAceVimExActions(editor,{
+      save:()=>saveRef.current?.(),
+      close:()=>onClose(),
+      isDirty:()=>editor?.getValue()!==text,
+    });
     if(editor.getValue()!==text){
       suppressChange.current=true;
       editor.setValue(text,-1);

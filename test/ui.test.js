@@ -25,6 +25,19 @@ test('Ace editor enables Monokai, Vim, and a save command',()=>{
   assert.match(html,/win:'Ctrl-S',mac:'Command-S'/);
 });
 
+test('Ace Vim ex commands support q, wq, and substitute',()=>{
+  assert.match(html,/function installAceVimExCommands\(\)/);
+  assert.match(html,/function bindAceVimExActions\(editor, actions\)/);
+  assert.match(html,/Vim\.defineEx\(name, name, handler\)/);
+  assert.match(html,/define\('q', \(cm, input\) => run\(cm, 'quit', input\)\)/);
+  assert.match(html,/define\('q!', \(cm, input\) => run\(cm, 'q!', input\)\)/);
+  assert.match(html,/define\('w', \(cm, input\) => run\(cm, 'write', input\)\)/);
+  assert.match(html,/define\('wq', \(cm, input\) => run\(cm, 'wq', input\)\)/);
+  assert.match(html,/define\('s', \(cm, input\) => run\(cm, 'substitute', input\)\)/);
+  assert.match(html,/bindAceVimExActions\(editor,\{/);
+  assert.match(html,/close:\(\)=>onClose\(\)/);
+});
+
 test('README Mermaid diagrams avoid fragile renderer syntax',()=>{
   const diagrams=[...readme.matchAll(/```mermaid\n([\s\S]*?)\n```/g)].map(match=>match[1]);
   assert.equal(diagrams.length,4);
