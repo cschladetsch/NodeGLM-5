@@ -16,6 +16,15 @@ const KAI_DIR=process.env.KAI_DIR    ||path.join(__dirname,'Ext/CppKAI');
 const ENET_DIR=process.env.ENET_DIR  ||path.join(__dirname,'Ext/ENet');
 const KAI_CONSOLE=process.env.KAI_CONSOLE||path.join(KAI_DIR,'Bin/Console');
 const MEMORY_FILE=process.env.NODEGLM_MEMORY_FILE||path.join(ROOT,'.nodeglm-memory.json');
+const RECOMMENDED_MODELS=[
+  {id:'qwen2.5-coder:1.5b',label:'Qwen Coder 1.5B',vram:'~2-3 GB',ram:'~4 GB',fit:'Lowest memory coding fallback'},
+  {id:'qwen2.5-coder:3b',label:'Qwen Coder 3B',vram:'~3-5 GB',ram:'~6 GB',fit:'Small coding model'},
+  {id:'qwen2.5-coder:7b',label:'Qwen Coder 7B',vram:'~6-9 GB',ram:'~10 GB',fit:'Default coding model'},
+  {id:'qwen2.5-coder:14b',label:'Qwen Coder 14B',vram:'~11-16 GB',ram:'~20 GB',fit:'Larger coding model'},
+  {id:'deepseek-coder-v2:16b-lite',label:'DeepSeek Coder V2 Lite',vram:'~12-18 GB',ram:'~24 GB',fit:'Stronger but heavier coding model'},
+  {id:'llama3.2:3b',label:'Llama 3.2 3B',vram:'~3-5 GB',ram:'~6 GB',fit:'Low-memory general chat'},
+  {id:'gemma3:4b',label:'Gemma 3 4B',vram:'~4-6 GB',ram:'~8 GB',fit:'Compact general chat'}
+];
 
 function readUiConfig(configPath=path.join(__dirname,'ui-config.json')){
   const config=JSON.parse(fs.readFileSync(configPath,'utf8'));
@@ -504,10 +513,21 @@ function availableModels(){
   });
 }
 
+function modelInfo(installed){
+  const installedSet=new Set(installed);
+  const recommended=new Set(RECOMMENDED_MODELS.map(model=>model.id));
+  const extras=installed.filter(id=>!recommended.has(id)).map(id=>({
+    id,label:id,vram:'Unknown',ram:'Unknown',fit:'Installed model'
+  }));
+  return [...RECOMMENDED_MODELS,...extras]
+    .map(model=>({...model,installed:installedSet.has(model.id)}));
+}
+
 app.get('/api/models',async(req,res)=>{
   try{
     const s=sess(req.query.sid||'default');
-    res.json({models:await availableModels(),selected:s.model});
+    const models=await availableModels();
+    res.json({models,modelInfo:modelInfo(models),selected:s.model});
   }catch(error){res.status(502).json({error:error.message});}
 });
 
@@ -822,4 +842,5 @@ if(require.main===module){
 }
 
 module.exports={app,server,safe,validSessionId,selectSessionModel,readUiConfig,
-  parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,extractMemoryFacts,addMemoryFacts,memoryPrompt};
+  parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,extractMemoryFacts,addMemoryFacts,memoryPrompt,
+  modelInfo,RECOMMENDED_MODELS};

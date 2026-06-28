@@ -58,7 +58,16 @@ test('header selects among models installed in the active endpoint',()=>{
   assert.match(html,/api\/models\?sid=/);
   assert.match(html,/api\/session\/model/);
   assert.match(html,/glm-selected-model/);
+  assert.match(html,/const \[modelInfo, setModelInfo\] = useState\(\[\]\)/);
+  assert.match(html,/setModelInfo\(body\.modelInfo\|\|\[\]\)/);
+  assert.match(html,/function modelTitle\(model\)/);
+  assert.match(html,/function modelOptionLabel\(model\)/);
+  assert.match(html,/ollama pull \$\{model\.id\}/);
+  assert.match(html,/disabled=\{!model\.installed\}/);
+  assert.match(html,/className="header-status model-hint"/);
   assert.match(server,/app\.get\('\/api\/models'/);
+  assert.match(server,/RECOMMENDED_MODELS/);
+  assert.match(server,/modelInfo:modelInfo\(models\)/);
   assert.match(server,/app\.post\('\/api\/session\/model'/);
   assert.match(server,/model:s\.model/);
 });
@@ -66,9 +75,9 @@ test('header selects among models installed in the active endpoint',()=>{
 test('header displays app and overall VRAM usage',()=>{
   assert.match(html,/className="resource-badge vram-badge"/);
   assert.match(html,/api\/resources/);
-  assert.match(html,/All GPUs/);
-  assert.match(html,/used of/);
-  assert.match(html,/for this app/);
+  assert.match(html,/return `VRAM \$\{formatMiB\(total\.appUsedMiB\)\}`/);
+  assert.match(html,/return `RAM \$\{formatMiB\(total\.appUsedMiB\)\}`/);
+  assert.match(html,/Overall: \$\{formatMiB\(total\.usedMiB\)\} \/ \$\{formatMiB\(total\.totalMiB\)\}/);
   assert.match(html,/formatMiB/);
   assert.match(server,/app\.get\('\/api\/resources'/);
   assert.doesNotMatch(server,/app\.get\('\/api\/vram'/);
@@ -93,6 +102,19 @@ test('main chat panel is a plain chat surface',()=>{
   assert.match(html,/How can I help\?/);
   assert.doesNotMatch(html,/main-question-box/);
   assert.doesNotMatch(html,/effort-row/);
+});
+
+test('main chat input supports arrow-key user message history',()=>{
+  assert.match(html,/const \[chatHistoryIndex, setChatHistoryIndex\] = useState\(-1\)/);
+  assert.match(html,/const chatDraftRef = useRef\(''\)/);
+  assert.match(html,/const userInputHistory = messages/);
+  assert.match(html,/message=>message\.role==='user'/);
+  assert.match(html,/\.reverse\(\)/);
+  assert.match(html,/function|const recallChatInput/);
+  assert.match(html,/e\.key==='ArrowUp'/);
+  assert.match(html,/e\.key==='ArrowDown'/);
+  assert.match(html,/setInput\(nextIndex<0\?chatDraftRef\.current:userInputHistory\[nextIndex\]\)/);
+  assert.match(html,/textarea\.setSelectionRange\(textarea\.value\.length,textarea\.value\.length\)/);
 });
 
 test('chat persists bounded conversation memory in local storage',()=>{

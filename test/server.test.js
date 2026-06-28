@@ -8,7 +8,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'glm-code-test-'));
 process.env.SAFE_ROOT = root;
 const {app, safe, validSessionId, selectSessionModel, readUiConfig,
   parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,
-  extractMemoryFacts,addMemoryFacts,memoryPrompt} = require('../server');
+  extractMemoryFacts,addMemoryFacts,memoryPrompt,modelInfo,RECOMMENDED_MODELS} = require('../server');
 
 test.after(() => {
   fs.rmSync(root, {recursive:true, force:true});
@@ -160,6 +160,15 @@ test('model selection is session-scoped and limited to installed models', async 
   assert.equal(selectSessionModel('model-b','glm:9b',['qwen:7b','glm:9b']),'glm:9b');
   assert.throws(()=>selectSessionModel('model-a','missing:1b',['qwen:7b']),/not installed/);
   assert.throws(()=>selectSessionModel('model-a',null,['qwen:7b']),/required/);
+});
+
+test('model metadata includes installed and potential smaller models', async () => {
+  const info=modelInfo(['qwen2.5-coder:7b','custom:latest']);
+  assert.ok(RECOMMENDED_MODELS.some(model=>model.id==='qwen2.5-coder:1.5b'));
+  assert.equal(info.find(model=>model.id==='qwen2.5-coder:7b').installed,true);
+  assert.equal(info.find(model=>model.id==='qwen2.5-coder:1.5b').installed,false);
+  assert.equal(info.find(model=>model.id==='custom:latest').installed,true);
+  assert.match(info.find(model=>model.id==='qwen2.5-coder:1.5b').vram,/GB/);
 });
 
 test('browser editor writes ROOT-relative files', async () => {

@@ -81,6 +81,12 @@
     outline: none;
   }
   .model-select:focus { border-color: var(--accent); }
+  .model-hint {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .header-dot {
     width: 8px; height: 8px;
     border-radius: 50%;
@@ -105,6 +111,9 @@
     border-radius: 4px;
     padding: 4px 7px;
     white-space: nowrap;
+    max-width: 96px;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .resource-badge strong { color: var(--text); font-weight: 600; }
 
@@ -828,9 +837,8 @@ function formatMiB(value) {
 
 function vramLabel(vram) {
   if(!vram?.available)return 'VRAM n/a';
-  const gpuName=(vram.gpus?.length===1&&vram.gpus[0]?.name) ? vram.gpus[0].name : 'All GPUs';
   const total=vram.total||{};
-  return `${gpuName}: ${formatMiB(total.usedMiB)} used of ${formatMiB(total.totalMiB)} total, ${formatMiB(total.appUsedMiB)} for this app`;
+  return `VRAM ${formatMiB(total.appUsedMiB)}`;
 }
 
 function vramTitle(vram) {
@@ -845,13 +853,25 @@ function vramTitle(vram) {
 function ramLabel(ram) {
   if(!ram?.available)return 'RAM n/a';
   const total=ram.total||{};
-  return `RAM: ${formatMiB(total.usedMiB)} used of ${formatMiB(total.totalMiB)} total, ${formatMiB(total.appUsedMiB)} for this app`;
+  return `RAM ${formatMiB(total.appUsedMiB)}`;
 }
 
 function ramTitle(ram) {
   if(!ram?.available)return ram?.error ? `RAM unavailable: ${ram.error}` : 'RAM unavailable';
   const total=ram.total||{};
   return `System RAM\nApp: ${formatMiB(total.appUsedMiB)}\nOverall: ${formatMiB(total.usedMiB)} / ${formatMiB(total.totalMiB)}\nFree: ${formatMiB(total.freeMiB)}`;
+}
+
+function modelTitle(model){
+  if(!model)return 'Model: checking';
+  const install=model.installed?'Installed':`Not installed. Run: ollama pull ${model.id}`;
+  return `${model.label||model.id} (${model.id})\n${install}\nVRAM: ${model.vram||'Unknown'}\nRAM: ${model.ram||'Unknown'}\n${model.fit||''}`;
+}
+
+function modelOptionLabel(model){
+  const status=model.installed?'':'not installed';
+  const memory=[model.vram,model.ram&&`RAM ${model.ram}`].filter(Boolean).join(', ');
+  return [model.label||model.id,memory,status].filter(Boolean).join(' - ');
 }
 
 function parseToolCall(text) {
@@ -1801,9 +1821,11 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
   const [memoryFacts, setMemoryFacts] = useState([]);
   const [memoryEditorOpen, setMemoryEditorOpen] = useState(false);
   const [chatHistoryEditorOpen, setChatHistoryEditorOpen] = useState(false);
+  const [chatHistoryIndex, setChatHistoryIndex] = useState(-1);
   const messagesEndRef = useRef(null);
   const taRef = useRef(null);
   const abortRef = useRef(null);
+  const chatDraftRef = useRef('');
 
   const loadMemoryFacts = useCallback(() => {
     fetch(`${API}/api/memory?sid=${encodeURIComponent(SID)}`)
@@ -2023,6 +2045,8 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
 
     setMessages(m => [...m, displayMsg]);
     setInput('');
+    setChatHistoryIndex(-1);
+    chatDraftRef.current='';
     setAttachedFiles([]);
 
     const directCd=/^cd(?:\s.*)?$/.test(input.trim());
@@ -2048,10 +2072,43 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
     await runAgent(apiMessages);
   };
 
+  const userInputHistory = messages
+    .filter(message=>message.role==='user'&&typeof message.content==='string'&&message.content.trim())
+    .map(message=>message.content)
+    .reverse();
+  const moveCaretToEnd = () => requestAnimationFrame(()=>{
+    const textarea=taRef.current;
+    if(textarea)textarea.setSelectionRange(textarea.value.length,textarea.value.length);
+  });
+  const recallChatInput = (direction,event) => {
+    const textarea=event.currentTarget;
+    const atStart=textarea.selectionStart===0&&textarea.selectionEnd===0;
+    const atEnd=textarea.selectionStart===textarea.value.length&&textarea.selectionEnd===textarea.value.length;
+    if(direction<0&&!atStart)return false;
+    if(direction>0&&!atEnd)return false;
+    if(userInputHistory.length===0)return false;
+    event.preventDefault();
+    if(chatHistoryIndex===-1)chatDraftRef.current=input;
+    const nextIndex=direction<0
+      ? Math.min(chatHistoryIndex+1,userInputHistory.length-1)
+      : chatHistoryIndex-1;
+    setChatHistoryIndex(nextIndex);
+    setInput(nextIndex<0?chatDraftRef.current:userInputHistory[nextIndex]);
+    moveCaretToEnd();
+    return true;
+  };
+  const onInputChange = event => {
+    setInput(event.target.value);
+    if(chatHistoryIndex!==-1)setChatHistoryIndex(-1);
+  };
   const onKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       send();
+    } else if(e.key==='ArrowUp') {
+      recallChatInput(-1,e);
+    } else if(e.key==='ArrowDown') {
+      recallChatInput(1,e);
     }
   };
 
@@ -2171,7 +2228,7 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
           <textarea
             ref={taRef}
             value={input}
-            onChange={e => setInput(e.target.value)}
+            onChange={onInputChange}
             onKeyDown={onKeyDown}
             placeholder="Message…"
             disabled={streaming||Boolean(pendingAction)}
@@ -2199,6 +2256,7 @@ function App() {
   const [cwd, setCwd]             = useState('');
   const [viewFile, setViewFile]   = useState(null);
   const [models, setModels]       = useState([]);
+  const [modelInfo, setModelInfo] = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [modelError, setModelError] = useState('');
   const [vram, setVram] = useState(null);
@@ -2218,6 +2276,11 @@ function App() {
 
   const chooseModel = async (model) => {
     setModelError('');
+    const info=modelInfo.find(item=>item.id===model);
+    if(info&&!info.installed){
+      setModelError(`Install ${model} first: ollama pull ${model}`);
+      return;
+    }
     try{
       const response=await fetch(`${API}/api/session/model`,{
         method:'POST',headers:{'Content-Type':'application/json'},
@@ -2236,6 +2299,7 @@ function App() {
       .then(({response,body})=>{
         if(!response.ok||body.error)throw new Error(body.error||`HTTP ${response.status}`);
         setModels(body.models||[]);
+        setModelInfo(body.modelInfo||[]);
         const preferred=localStorage.getItem('glm-selected-model');
         const next=preferred&&body.models.includes(preferred)?preferred:body.selected;
         setSelectedModel(next);
@@ -2294,16 +2358,23 @@ function App() {
   useEffect(() => {
     localStorage.setItem('glm-right-width', String(Math.round(rightWidth)));
   }, [rightWidth]);
+  const selectedModelInfo=modelInfo.find(model=>model.id===selectedModel)||
+    (selectedModel?{id:selectedModel,label:selectedModel,installed:models.includes(selectedModel),vram:'Unknown',ram:'Unknown',fit:'Active model'}:null);
 
   return (
     <>
       <div className="header">
         <span className="header-logo">GLM</span>
         <select className="model-select" value={selectedModel} onChange={event=>chooseModel(event.target.value)}
-          disabled={models.length===0} title={modelError||'Active model'}>
+          disabled={modelInfo.length===0} title={modelError||modelTitle(selectedModelInfo)}>
           {models.length===0 && <option value="">No models found</option>}
-          {models.map(model=><option key={model} value={model}>{model}</option>)}
+          {modelInfo.map(model=><option key={model.id} value={model.id} disabled={!model.installed} title={modelTitle(model)}>
+            {modelOptionLabel(model)}
+          </option>)}
         </select>
+        <span className="header-status model-hint" title={modelError||modelTitle(selectedModelInfo)}>
+          {modelError||`${selectedModelInfo?.vram||'VRAM ?'} VRAM`}
+        </span>
         <span className="usage-badges">
           <span className="resource-badge vram-badge" title={vramTitle(vram)}><strong>{vramLabel(vram)}</strong></span>
           <span className="resource-badge ram-badge" title={ramTitle(ram)}><strong>{ramLabel(ram)}</strong></span>
