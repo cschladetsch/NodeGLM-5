@@ -472,6 +472,16 @@ app.get('/api/session',(req,res)=>{
   res.json({cwd:s.cwd,model:s.model,root:ROOT,memory:s.memory});
 });
 
+app.post('/api/session/cwd',(req,res)=>{
+  try{
+    const s=sess(req.body.sid||'default');
+    const abs=safe(req.body.path||'',s.cwd);
+    if(!fs.statSync(abs).isDirectory())throw new Error('Not a directory: '+abs);
+    s.cwd=abs;
+    res.json({ok:true,cwd:s.cwd});
+  }catch(e){res.status(400).json({error:e.message});}
+});
+
 app.get('/api/memory',(req,res)=>{
   const s=sess(req.query.sid||'default');
   s.memory=readStoredMemory();

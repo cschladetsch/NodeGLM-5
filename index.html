@@ -727,6 +727,75 @@
     line-height:1;
   }
   .debug-actions { display:flex;gap:6px;padding:8px 10px;border-bottom:1px solid var(--border); }
+  .debug-workspace {
+    flex:1;
+    min-height:0;
+    display:grid;
+    grid-template-rows:minmax(0,1fr) minmax(140px,34%);
+    background:var(--bg);
+  }
+  .debug-top {
+    min-height:0;
+    display:grid;
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+    border-bottom:1px solid var(--border);
+  }
+  .debug-panel {
+    min-width:0;
+    min-height:0;
+    display:flex;
+    flex-direction:column;
+    border-right:1px solid var(--border);
+  }
+  .debug-panel:last-child { border-right:0; }
+  .debug-panel-head {
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:7px 10px;
+    border-bottom:1px solid var(--border);
+    background:var(--surface);
+    font:10px var(--mono);
+    color:var(--muted);
+    text-transform:uppercase;
+  }
+  .debug-panel-head strong { color:var(--text);font-size:11px;letter-spacing:0; }
+  .debug-panel-body {
+    flex:1;
+    min-height:0;
+    overflow:auto;
+    padding:8px 10px;
+    font:11px/1.45 var(--mono);
+  }
+  .debug-kv {
+    display:grid;
+    grid-template-columns:88px minmax(0,1fr);
+    gap:4px 8px;
+    color:var(--muted);
+    margin-bottom:8px;
+  }
+  .debug-kv span:nth-child(2n) { color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+  .debug-stack-list { display:flex;flex-direction:column;gap:5px; }
+  .debug-stack-row {
+    display:grid;
+    grid-template-columns:42px minmax(0,1fr);
+    gap:8px;
+    padding:5px 6px;
+    border:1px solid var(--border);
+    background:var(--raised);
+    border-radius:4px;
+  }
+  .debug-stack-row.current { border-color:var(--accent); }
+  .debug-stack-index { color:var(--accent2);font-variant-numeric:tabular-nums; }
+  .debug-stack-value { min-width:0;white-space:pre-wrap;word-break:break-word;color:var(--text); }
+  .debug-stack-type { color:var(--muted);font-size:10px;margin-top:2px; }
+  .debug-empty { color:var(--muted);font:11px var(--mono);padding:8px 0; }
+  .debug-console {
+    min-height:0;
+    display:flex;
+    flex-direction:column;
+  }
+  .debug-console .kai-out { min-height:0; }
   .kai-out {
     flex: 1;
     overflow: auto;
@@ -1021,7 +1090,7 @@ function fmt(bytes) {
 }
 
 // ── FileBrowser sidebar ────────────────────────────────────────────────────
-function FileBrowser({ cwd, onInject, onOpenFile }) {
+function FileBrowser({ cwd, root, onInject, onOpenFile, onCwdChange }) {
   const [curPath, setCurPath] = useState('');
   const [entries, setEntries] = useState([]);
   const [selected, setSelected] = useState(null);
@@ -1041,9 +1110,27 @@ function FileBrowser({ cwd, onInject, onOpenFile }) {
     load('');
   }, [load, cwd]);
 
+  const changeCwd = async (p) => {
+    setErr(null);
+    try {
+      const r = await fetch(`${API}/api/session/cwd`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: p, sid: SID }),
+      });
+      const d = await r.json();
+      if (!r.ok || d.error) throw new Error(d.error || `HTTP ${r.status}`);
+      if (d.cwd) onCwdChange?.(d.cwd);
+      setSelected(null);
+      load('');
+    } catch(e) {
+      setErr(e.message);
+    }
+  };
+
   const handleClick = (e) => {
     if (e.type === 'dir') {
-      load(curPath === '.' ? e.name : `${curPath}/${e.name}`);
+      changeCwd(curPath === '.' ? e.name : `${curPath}/${e.name}`);
     } else {
       const fp = curPath === '.' ? e.name : `${curPath}/${e.name}`;
       setSelected(fp);
@@ -1052,9 +1139,7 @@ function FileBrowser({ cwd, onInject, onOpenFile }) {
   };
 
   const goUp = () => {
-    const parts = curPath.split('/').filter(Boolean);
-    parts.pop();
-    load(parts.join('/') || '');
+    changeCwd('..');
   };
 
   const visibleEntries = showDotfiles
@@ -1076,7 +1161,7 @@ function FileBrowser({ cwd, onInject, onOpenFile }) {
       <div className="sidebar-path" title={curPath}>~/{curPath}</div>
       {err && <div style={{padding:'8px 12px',color:'var(--warn)',fontSize:11}}>{err}</div>}
       <div className="sidebar-list">
-        {curPath && curPath !== '.' && (
+        {cwd && root && cwd !== root && (
           <div className="sidebar-entry sidebar-back" onClick={goUp}>
             <span className="icon">↑</span>
             <span className="name">..</span>
@@ -1446,19 +1531,78 @@ function TreeInspector({snapshot,onRefresh,onPasteContinuation}){
   </div>;
 }
 
-function DebugInspector({snapshot,onRefresh,onAction,output}){
+function DebugStackList({items,empty,currentTop,onPasteContinuation}){
+  if(!items?.length)return <div className="debug-empty">{empty}</div>;
+  return <div className="debug-stack-list">
+    {items.map((item,i)=>{
+      const value=String(item?.value??item?.text??item?.source??item?.label??'');
+      const type=String(item?.type??'');
+      const handle=String(item?.handle??item?.id??'');
+      const key=`${item?.index??i}-${handle}-${value}`;
+      const pasteText=/continuation/i.test(type)?value:'';
+      return <div
+        key={key}
+        className={`debug-stack-row${currentTop&&i===0?' current':''}`}
+        title={pasteText?'Double-click to paste to Pi':undefined}
+        onDoubleClick={pasteText?()=>onPasteContinuation?.(pasteText):undefined}
+      >
+        <span className="debug-stack-index">[{item?.index??i}]</span>
+        <span className="debug-stack-value">
+          {value||'(empty)'}
+          <div className="debug-stack-type">{type||'unknown'}{handle&&handle!=='-1'?` #${handle}`:''}</div>
+        </span>
+      </div>;
+    })}
+  </div>;
+}
+
+function DebugInspector({snapshot,onRefresh,onAction,output,onClearConsole,onPasteContinuation}){
   const executors=snapshot?.executors||[];
   const [selected,setSelected]=useState('');
   useEffect(()=>{if(!executors.some(exec=>exec.id===selected))setSelected(executors[0]?.id||'');},[snapshot,selected]);
   const exec=executors.find(item=>item.id===selected);
+  const contextFallback=exec?.nodes?.filter(isContinuationNode).map((node,index)=>({
+    index,type:node.type,handle:node.id,value:getContinuationPasteText(node)||node.label
+  }))||[];
+  const contextItems=exec?.contextStack?.length?exec.contextStack:contextFallback;
   return <div className="executor-inspector">
-    <div className="executor-toolbar"><ExecutorSelect executors={executors} value={selected} onChange={setSelected}/>
-      <button className="btn bg" onClick={onRefresh}>Refresh</button></div>
-    {exec&&<div className="executor-meta">Tree {exec.treeId||'none'} · data {exec.dataSize} · context {exec.contextSize} · scope {exec.scope||'#'+exec.scopeId}</div>}
-    <div className="debug-actions">
-      {['step','continue','stack','clear'].map(action=><button key={action} className="btn bg" disabled={!exec} onClick={()=>onAction(selected,action)}>{action}</button>)}
+    <div className="executor-toolbar">
+      <ExecutorSelect executors={executors} value={selected} onChange={setSelected}/>
+      <button className="btn bg" onClick={onRefresh}>Refresh</button>
     </div>
-    <div className="kai-out"><AnsiOutput text={output||'Select an Executor to debug.\n'} mode="pi"/></div>
+    <div className="debug-workspace">
+      <div className="debug-top">
+        <section className="debug-panel">
+          <div className="debug-panel-head"><strong>Current State</strong><span>{exec?`Executor #${exec.id}`:'No Executor'}</span></div>
+          <div className="debug-panel-body">
+            {exec ? <>
+              <div className="debug-kv">
+                <span>Executor</span><span>#{exec.id}</span>
+                <span>Tree</span><span>{exec.treeId||'none'}</span>
+                <span>Root</span><span>#{exec.rootId??'none'}</span>
+                <span>Scope</span><span>{exec.scope||`#${exec.scopeId}`}</span>
+                <span>Data</span><span>{exec.dataSize??exec.dataStack?.length??0}</span>
+                <span>Context</span><span>{exec.contextSize??contextItems.length}</span>
+              </div>
+              <div className="debug-actions">
+                {['step','continue','stack','clear'].map(action=><button key={action} className="btn bg" disabled={!exec} onClick={()=>onAction(selected,action)}>{action}</button>)}
+              </div>
+              <DebugStackList items={exec.dataStack||[]} empty="Data stack is empty." currentTop={true}/>
+            </> : <div className="debug-empty">No live Executors.</div>}
+          </div>
+        </section>
+        <section className="debug-panel">
+          <div className="debug-panel-head"><strong>Context</strong><span>{contextItems.length} frame{contextItems.length===1?'':'s'}</span></div>
+          <div className="debug-panel-body">
+            <DebugStackList items={contextItems} empty="Context stack is empty." currentTop={true} onPasteContinuation={onPasteContinuation}/>
+          </div>
+        </section>
+      </div>
+      <section className="debug-console">
+        <div className="debug-panel-head"><strong>Console</strong><span style={{flex:1}}>KAI traces and debug output</span><button className="btn bg" style={{fontSize:10,padding:'3px 7px'}} onClick={onClearConsole}>Clear</button></div>
+        <div className="kai-out"><AnsiOutput text={output||'Trace output will appear here.\n'} mode="pi"/></div>
+      </section>
+    </div>
   </div>;
 }
 
@@ -1549,7 +1693,7 @@ function KaiConsolePanel({view,rhoMirror,onMirrorChange,piDraft,onConsumePiDraft
         <span className={status==='connected'?'on':'off'}>{status}</span>
       </div>
       {view==='tree' ? <TreeInspector snapshot={treeSnapshot} onRefresh={refreshExecutors} onPasteContinuation={onPasteContinuation}/>
-      : view==='debugger' ? <DebugInspector snapshot={treeSnapshot} onRefresh={refreshExecutors} onAction={debugAction} output={output}/>
+      : view==='debugger' ? <DebugInspector snapshot={treeSnapshot} onRefresh={refreshExecutors} onAction={debugAction} output={output} onClearConsole={()=>setOutput('')} onPasteContinuation={onPasteContinuation}/>
       : view==='rho' ? (
         <RhoEditorPanel
           value={inp}
@@ -2678,6 +2822,7 @@ function App() {
   const [rhoMirror, setRhoMirror] = useState('');
   const [piDraft, setPiDraft] = useState('');
   const [cwd, setCwd]             = useState('');
+  const [root, setRoot]           = useState('');
   const [viewFile, setViewFile]   = useState(null);
   const [models, setModels]       = useState([]);
   const [modelInfo, setModelInfo] = useState([]);
@@ -2809,7 +2954,7 @@ function App() {
   useEffect(() => {
     fetch(`${API}/api/session?sid=${encodeURIComponent(SID)}`)
       .then(r => r.json())
-      .then(d => { if (d.cwd) setCwd(d.cwd); })
+      .then(d => { if (d.cwd) setCwd(d.cwd); if (d.root) setRoot(d.root); })
       .catch(() => {});
   }, []);
 
@@ -2873,7 +3018,7 @@ function App() {
       </div>
 
       <div className="workspace">
-        <FileBrowser cwd={cwd} onInject={injectToChat} onOpenFile={setViewFile}/>
+        <FileBrowser cwd={cwd} root={root} onInject={injectToChat} onOpenFile={setViewFile} onCwdChange={setCwd}/>
         <div className="main" style={{display:viewFile?'none':'flex'}}>
           <ChatPanel injectedFile={injectedFile} onClearInject={()=>setInj(null)} onCwdChange={setCwd}/>
         </div>

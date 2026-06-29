@@ -95,8 +95,17 @@ test('editor save posts current Ace content to the filesystem endpoint',()=>{
 
 test('RHS Bash cwd is propagated to the file browser',()=>{
   assert.match(html,/<ReplPanel cwd=\{cwd\} onCwdChange=\{setCwd\}/);
-  assert.match(html,/<FileBrowser cwd=\{cwd\}/);
+  assert.match(html,/<FileBrowser cwd=\{cwd\} root=\{root\}/);
   assert.match(html,/api\/session\?sid=/);
+});
+
+test('file browser parent navigation updates the shared cwd',()=>{
+  assert.match(html,/function FileBrowser\(\{ cwd, root, onInject, onOpenFile, onCwdChange \}\)/);
+  assert.match(html,/api\/session\/cwd/);
+  assert.match(html,/body: JSON\.stringify\(\{ path: p, sid: SID \}\)/);
+  assert.match(html,/onCwdChange\?\.\(d\.cwd\)/);
+  assert.match(html,/\{cwd && root && cwd !== root && \(/);
+  assert.match(html,/const goUp = \(\) => \{\s*changeCwd\('\.\.'\);/);
 });
 
 test('Chat Box cwd changes render directly in the Bash panel',()=>{
@@ -334,6 +343,12 @@ test('Chat Box treats the Bash cwd as authoritative command context',()=>{
   assert.match(html,/if\(pending\.resume===false\)/);
 });
 
+test('Pi input sends trailing backslashes to CppKAI instead of buffering them',()=>{
+  assert.match(html,/wsRef\.current\.send\(JSON\.stringify\(\{type:'input',data:command\}\)\)/);
+  assert.doesNotMatch(html,/pendingLines/);
+  assert.doesNotMatch(html,/endsWith\('\\\\'\)/);
+});
+
 test('chat supports cancellation and health checks inference readiness',()=>{
   assert.match(html,/new AbortController\(\)/);
   assert.match(html,/abortRef\.current\?\.abort\(\)/);
@@ -431,12 +446,26 @@ test('Debug and Tree explicitly select live Executors',()=>{
   assert.match(html,/function ExecutorSelect/);
   assert.match(html,/function TreeInspector/);
   assert.match(html,/function DebugInspector/);
+  assert.match(html,/function DebugStackList/);
   assert.match(html,/type:'inspect_tree'/);
   assert.match(html,/type:'debug_action',id:requestId\(\),executorId,action/);
   assert.match(html,/api\/kai\?sid=/);
   assert.match(server,/KAI_CONTROL_FD:'3'/);
   assert.match(server,/runtime\.register\(requestId,socket\)/);
   assert.match(server,/parsed\.type==='debug_action'/);
+});
+
+test('Debug panel renders current state, context, and console at once',()=>{
+  assert.match(html,/className="debug-workspace"/);
+  assert.match(html,/className="debug-top"/);
+  assert.match(html,/<strong>Current State<\/strong>/);
+  assert.match(html,/<strong>Context<\/strong>/);
+  assert.match(html,/<strong>Console<\/strong>/);
+  assert.match(html,/exec\.dataStack/);
+  assert.match(html,/exec\.contextStack/);
+  assert.match(html,/onClearConsole=\{\(\)=>setOutput\(''\)\}/);
+  assert.match(html,/onPasteContinuation=\{onPasteContinuation\}/);
+  assert.match(html,/Context stack is empty/);
 });
 
 test('Executor inspection and debugging use KAI logging',()=>{

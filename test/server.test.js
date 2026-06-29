@@ -208,6 +208,18 @@ test('browser filesystem follows the Bash session cwd', async () => {
   assert.ok(list.body.entries.some(entry=>entry.name==='session.txt'));
 });
 
+test('browser cwd navigation updates the shared session cwd', async () => {
+  fs.mkdirSync(path.join(root,'browser-nav'));
+  const down=await invoke('post','/api/session/cwd',{sid:'browser-nav',path:'browser-nav'});
+  assert.equal(down.body.cwd,path.join(root,'browser-nav'));
+
+  const up=await invoke('post','/api/session/cwd',{sid:'browser-nav',path:'..'});
+  assert.equal(up.body.cwd,root);
+
+  const list=await invoke('get','/api/fs/list',{}, {sid:'browser-nav',path:''});
+  assert.equal(list.body.cwd,root);
+});
+
 test('write diff previews existing and new files without changing them', async () => {
   fs.writeFileSync(path.join(root,'existing.txt'),'old\n');
   const existing=(await invoke('post','/api/tool/write_file/diff',

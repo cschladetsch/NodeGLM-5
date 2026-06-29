@@ -38,6 +38,10 @@ test('CppKAI inspection uses correlated duplex control I/O',
       assert.equal(response.type,'tree');
       assert.equal(response.ok,true);
       assert.ok(response.executors.length>0);
+      if ('dataStack' in response.executors[0] || 'contextStack' in response.executors[0]) {
+        assert.ok(Array.isArray(response.executors[0].dataStack));
+        assert.ok(Array.isArray(response.executors[0].contextStack));
+      }
       assert.doesNotMatch(stdout,/__nodeglm_tree__|NODEGLM_TREE_BEGIN/);
     }finally{
       child.kill('SIGTERM');
