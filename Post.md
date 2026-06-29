@@ -39,7 +39,8 @@ matter.
 
 I have also brought the project documentation up to date with Mermaid diagrams
 covering the architecture, fact memory, agent approval sequence, and
-path-validation flow.
+path-validation flow. The complete local server API is documented in
+`API.md`, so the post and README do not need to duplicate endpoint details.
 
 The current test path is intentionally boring: `./run_tests.sh` is the single
 entry point for local verification, including dependency refresh, optional
@@ -63,7 +64,7 @@ sequenceDiagram
     participant LLM as Model
 
     User->>UI: My name is Christian
-    UI->>API: POST /api/chat
+    UI->>API: Send chat request
     API->>API: Extract explicit fact
     API->>API: Persist .nodeglm-memory.json
     API->>LLM: Prompt with known facts when relevant

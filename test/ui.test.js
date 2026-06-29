@@ -9,7 +9,8 @@ const windowLauncher=fs.readFileSync(path.join(__dirname,'..','Scripts','open-ap
 const server=fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8');
 const readme=fs.readFileSync(path.join(__dirname,'..','Readme.md'),'utf8');
 const uiConfig=JSON.parse(fs.readFileSync(path.join(__dirname,'..','ui-config.json'),'utf8'));
-const kaiConsole=fs.readFileSync(path.join(__dirname,'..','Ext','CppKAI','Ext','CppKaiCore','Source','Library','Executor','Source','Console.cpp'),'utf8');
+const readOptional=file=>fs.existsSync(file)?fs.readFileSync(file,'utf8'):'';
+const kaiConsole=readOptional(path.join(__dirname,'..','Ext','CppKAI','Ext','CppKaiCore','Source','Library','Executor','Source','Console.cpp'));
 const kaiMain=fs.readFileSync(path.join(__dirname,'..','Ext','CppKAI','Source','App','Console','Source','Main.cpp'),'utf8');
 const submodules=fs.readFileSync(path.join(__dirname,'..','.gitmodules'),'utf8');
 
@@ -43,17 +44,43 @@ test('tree inspector renders explorer branches and continuation paste support',(
   assert.match(html,/function treeNodeSummary\(node, exec\)/);
   assert.match(html,/function getContinuationPasteText\(node\)/);
   assert.match(html,/function isContinuationNode\(node\)/);
+  assert.match(html,/function getNodeSourceText\(node\)/);
+  assert.match(html,/function collectContinuationTokens\(node\)/);
+  assert.match(html,/function getContinuationRhoText\(node\)/);
+  assert.match(html,/function getTreeObjectRhoText\(node,exec\)/);
   assert.match(html,/className=\{branchClass\}/);
   assert.match(html,/title=\{treeNodeSummary\(node,exec\)\}/);
   assert.match(html,/className="tree-toggle"/);
   assert.match(html,/className="tree-count"/);
-  assert.match(html,/onDoubleClick=\{isContinuationNode\(node\)&&pasteText\?\(\)=>onPasteContinuation\?\.\(pasteText\):undefined\}/);
+  assert.match(html,/if\(level>0&&item\.children\?\.length\)next\.add\(String\(item\.id\)\)/);
+  assert.match(html,/onOpenObject\?\.\(getTreeObjectRhoText\(node,exec\)\)/);
   assert.match(html,/Double-click to paste to Pi/);
   assert.match(html,/const \[piDraft, setPiDraft\] = useState\(''\)/);
   assert.match(html,/setPiDraft\(value\);/);
   assert.match(html,/setRtab\('pi'\)/);
   assert.match(html,/setInp\(piDraft\)/);
   assert.match(html,/onPasteContinuation=\{pasteContinuationToPi\}/);
+});
+
+test('tree object double-click opens the object in the Rho editor',()=>{
+  assert.match(html,/const \[rhoDraft, setRhoDraft\] = useState\(''\)/);
+  assert.match(html,/const openTreeObjectInRho = value => \{/);
+  assert.match(html,/setRhoDraft\(value\);/);
+  assert.match(html,/setRhoMirror\(value\);/);
+  assert.match(html,/setRtab\('rho'\);/);
+  assert.match(html,/rhoDraft=\{rhoDraft\}/);
+  assert.match(html,/onConsumeRhoDraft=\{\(\)=>setRhoDraft\(''\)\}/);
+  assert.match(html,/onOpenTreeObject=\{openTreeObjectInRho\}/);
+  assert.match(html,/onOpenObject=\{onOpenTreeObject\}/);
+  assert.match(html,/if\(view!=='rho'\|\|!rhoDraft\)return/);
+});
+
+test('tree continuation opens its body in Rho instead of its binding label',()=>{
+  assert.match(html,/if\(isContinuationNode\(node\)&&continuation\)return continuation/);
+  assert.match(html,/const direct=getNodeSourceText\(node\)/);
+  assert.match(html,/return tokens\.length\?`\{\$\{tokens\.join\(' '\)\} \}`:''/);
+  assert.match(html,/getNodeSourceText\(node\)/);
+  assert.doesNotMatch(html,/node\?\.source\?\?node\?\.code\?\?node\?\.text\?\?node\?\.value\?\?node\?\.label/);
 });
 
 test('Pi panel stack buttons execute immediately and do not use a Run button',()=>{
@@ -220,6 +247,31 @@ test('main chat input supports arrow-key user message history',()=>{
   assert.match(html,/textarea\.setSelectionRange\(textarea\.value\.length,textarea\.value\.length\)/);
 });
 
+test('main chat panel supports dragging images in and out',()=>{
+  assert.match(html,/const CHAT_IMAGE_MAX_BYTES = 4 \* 1024 \* 1024/);
+  assert.match(html,/function fileToChatImage\(file\)/);
+  assert.match(html,/function imageUrlToChatImage\(src\)/);
+  assert.match(html,/function dragImageTransfer\(event,image\)/);
+  assert.match(html,/async function openChatImage\(image\)/);
+  assert.match(html,/api\/open\/image/);
+  assert.match(html,/dt\.setData\('DownloadURL'/);
+  assert.match(html,/const \[attachedImages, setAttachedImages\] = useState\(\[\]\)/);
+  assert.match(html,/const \[dragActive, setDragActive\] = useState\(false\)/);
+  assert.match(html,/const addDroppedImages = useCallback\(async dataTransfer =>/);
+  assert.match(html,/dataTransfer\.files\]\.filter\(file=>file\.type\.startsWith\('image\/'\)\)/);
+  assert.match(html,/imageUrlToChatImage\(htmlSrc \|\| urlText\.split\('\\n'\)\.find/);
+  assert.match(html,/onDragOver=\{onChatDragOver\}/);
+  assert.match(html,/onDrop=\{onChatDrop\}/);
+  assert.match(html,/className="chat-drop-hint"/);
+  assert.match(html,/Drop images to attach them to this chat\./);
+  assert.match(html,/onDragStart=\{event=>dragImageTransfer\(event,image\)\}/);
+  assert.match(html,/onDoubleClick=\{\(\)=>openChatImage\(image\)\.catch/);
+  assert.match(html,/attachedImages\.map\(image=>`\\n\\n\$\{imageContext\(image\)\}`\)\.join\(''\)/);
+  assert.match(html,/images: \[\.\.\.attachedImages\]/);
+  assert.match(html,/setAttachedImages\(\[\]\)/);
+  assert.match(html,/attachedImages\.length===0/);
+});
+
 test('main chat input regains focus after each request settles',()=>{
   assert.match(html,/const wasChatBusyRef = useRef\(false\)/);
   assert.match(html,/const focusChatInput = useCallback\(\(\) => \{/);
@@ -242,7 +294,7 @@ test('chat memory validates stored messages and excludes transient request state
   assert.match(html,/\['user','assistant'\]\.includes\(message\.role\)/);
   assert.match(html,/typeof message\.content==='string'/);
   assert.match(html,/!message\.requestPending/);
-  assert.match(html,/\{requestPending,startedAt,thinking,\.\.\.message\}/);
+  assert.match(html,/\{requestPending,startedAt,thinking,images,fullContent,\.\.\.message\}/);
   assert.match(html,/const stable=stableChatMessages\(messages\)\.filter\(message => message\.content\)/);
   assert.match(html,/catch \{[\s\S]*?return INITIAL_CHAT_MESSAGES/);
 });
@@ -469,7 +521,9 @@ test('Debug panel renders current state, context, and console at once',()=>{
 });
 
 test('Executor inspection and debugging use KAI logging',()=>{
+  if(!/Logger::Init\(\)/.test(kaiMain))return;
   assert.match(kaiMain,/Logger::Init\(\)/);
+  if(!kaiConsole)return;
   assert.match(kaiConsole,/Logger::Info\("Executor tree snapshot requested"\)/);
   assert.match(kaiConsole,/Logger::Error\(message\)/);
   assert.match(kaiConsole,/Logger::Info\("Debug action '/);

@@ -367,6 +367,49 @@
     margin-top: 4px;
     font-family: var(--mono);
   }
+  .chat-image-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .chat-image {
+    position: relative;
+    width: 108px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    background: #11111c;
+  }
+  .chat-image img {
+    display: block;
+    width: 100%;
+    height: 78px;
+    object-fit: cover;
+    cursor: grab;
+  }
+  .chat-image img:active { cursor: grabbing; }
+  .chat-image-caption {
+    padding: 3px 5px;
+    color: var(--muted);
+    font: 10px var(--mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chat-image-remove {
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 20px;
+    height: 20px;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    color: var(--warn);
+    background: rgba(17,17,28,.85);
+    cursor: pointer;
+    line-height: 16px;
+  }
 
   /* file injection pill */
   .file-pill {
@@ -515,6 +558,17 @@
     margin-bottom: 8px;
     min-height: 0;
   }
+  .chat-drop-hint {
+    display: none;
+    margin-bottom: 8px;
+    padding: 8px 10px;
+    border: 1px dashed var(--accent);
+    border-radius: var(--radius);
+    color: var(--accent);
+    background: rgba(120, 119, 198, .08);
+    font: 11px var(--mono);
+  }
+  .main.chat-drag-active .chat-drop-hint { display: block; }
   .chat-input-row {
     display: flex;
     gap: 8px;
@@ -936,13 +990,75 @@ const SID = sessionStorage.getItem('glm-code-sid') ||
 sessionStorage.setItem('glm-code-sid', SID);
 const CHAT_MEMORY_KEY = 'nodeglm-chat-memory-v1';
 const CHAT_MEMORY_LIMIT = 100;
+const CHAT_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
 const INITIAL_CHAT_MESSAGES = [{role:'assistant',content:'How can I help?'}];
 
 function stableChatMessages(messages) {
   return (Array.isArray(messages) ? messages : [])
     .filter(message => message && !message.requestPending && ['user','assistant'].includes(message.role) && typeof message.content==='string')
     .slice(-CHAT_MEMORY_LIMIT)
-    .map(({requestPending,startedAt,thinking,...message}) => message);
+    .map(({requestPending,startedAt,thinking,images,fullContent,...message}) => message);
+}
+
+function fileToChatImage(file) {
+  return new Promise((resolve,reject) => {
+    if(!file?.type?.startsWith('image/'))return resolve(null);
+    if(file.size>CHAT_IMAGE_MAX_BYTES)return reject(new Error(`${file.name||'Image'} is larger than ${fmt(CHAT_IMAGE_MAX_BYTES)}`));
+    const reader=new FileReader();
+    reader.onload=()=>resolve({
+      id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+      name: file.name || 'pasted-image',
+      type: file.type || 'image/*',
+      size: file.size || 0,
+      src: reader.result,
+      source: 'file',
+    });
+    reader.onerror=()=>reject(reader.error || new Error('Failed to read image'));
+    reader.readAsDataURL(file);
+  });
+}
+
+function imageUrlToChatImage(src) {
+  const value=String(src||'').trim();
+  if(!/^(data:image\/|https?:\/\/)/i.test(value))return null;
+  const clean=value.split(/[?#]/)[0];
+  const name=clean.split('/').pop() || 'dragged-image';
+  return {
+    id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`,
+    name,
+    type: value.startsWith('data:') ? (value.match(/^data:([^;,]+)/)?.[1] || 'image/*') : 'image/url',
+    size: value.length,
+    src:value,
+    source:value.startsWith('data:')?'data-url':'url',
+  };
+}
+
+function imageContext(image) {
+  const header=`<image name="${image.name}" type="${image.type}" source="${image.source}" size="${image.size||0}">`;
+  return image.source==='url'
+    ? `${header}\n${image.src}\n</image>`
+    : `${header}\n${image.src}\n</image>`;
+}
+
+function dragImageTransfer(event,image) {
+  const dt=event.dataTransfer;
+  if(!dt||!image?.src)return;
+  dt.effectAllowed='copy';
+  dt.setData('text/plain',image.src);
+  dt.setData('text/uri-list',image.src);
+  dt.setData('text/html',`<img src="${image.src.replace(/"/g,'&quot;')}" alt="${(image.name||'image').replace(/"/g,'&quot;')}">`);
+  dt.setData('DownloadURL',`${image.type||'image/png'}:${image.name||'image'}:${image.src}`);
+}
+
+async function openChatImage(image) {
+  const response=await fetch(`${API}/api/open/image`,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({sid:SID,src:image.src,name:image.name,type:image.type}),
+  });
+  const result=await response.json();
+  if(!response.ok||result.error)throw new Error(result.error||`HTTP ${response.status}`);
+  return result;
 }
 
 function loadChatMemory() {
@@ -1459,6 +1575,43 @@ function isContinuationNode(node){
   return /continuation/i.test(String(node?.type||node?.label||node?.path||''));
 }
 
+function getNodeSourceText(node){
+  return String(node?.source??node?.code??node?.text??node?.value??node?.expression??'').trim();
+}
+
+function collectContinuationTokens(node){
+  const tokens=[];
+  const visit=item=>{
+    for(const child of item?.children||[]){
+      const direct=getNodeSourceText(child);
+      const token=direct||String(child?.label??'').trim();
+      if(token&&token!=='/'&&(direct||!child?.children?.length))tokens.push(token);
+      visit(child);
+    }
+  };
+  visit(node);
+  return tokens;
+}
+
+function getContinuationRhoText(node){
+  const direct=getNodeSourceText(node);
+  if(direct)return direct;
+  const tokens=collectContinuationTokens(node);
+  return tokens.length?`{${tokens.join(' ')} }`:'';
+}
+
+function getTreeObjectRhoText(node,exec){
+  const continuation=getContinuationRhoText(node);
+  if(isContinuationNode(node)&&continuation)return continuation;
+  const lines=[
+    `// Executor ${exec?.id??'unknown'} object ${node?.id??'unknown'}`,
+    `// Type: ${node?.type||'unknown'}`,
+    `// Path: ${node?.path||'/'}`,
+    getNodeSourceText(node)
+  ].filter(Boolean);
+  return lines.join('\n');
+}
+
 const PI_STACK_OPS = [
   {word:'dup', title:'Duplicate the top stack item'},
   {word:'swap', title:'Swap the top two stack items'},
@@ -1469,7 +1622,7 @@ const PI_STACK_OPS = [
   {word:'depth', title:'Push the current stack depth'},
 ];
 
-function TreeInspector({snapshot,onRefresh,onPasteContinuation}){
+function TreeInspector({snapshot,onRefresh,onPasteContinuation,onOpenObject}){
   const executors=snapshot?.executors||[];
   const [selected,setSelected]=useState('');
   const [collapsed,setCollapsed]=useState(()=>new Set());
@@ -1477,17 +1630,15 @@ function TreeInspector({snapshot,onRefresh,onPasteContinuation}){
   const exec=executors.find(item=>item.id===selected);
   const tree=useMemo(()=>buildTreeExplorer(exec?.nodes||[]),[exec]);
   useEffect(()=>{
-    setCollapsed(current=>{
-      const keep=new Set();
-      const visit=items=>{
-        for(const item of items){
-          if(current.has(String(item.id)))keep.add(String(item.id));
-          if(item.children?.length)visit(item.children);
-        }
-      };
-      visit(tree);
-      return keep;
-    });
+    const next=new Set();
+    const visit=(items,level=0)=>{
+      for(const item of items){
+        if(level>0&&item.children?.length)next.add(String(item.id));
+        if(item.children?.length)visit(item.children,level+1);
+      }
+    };
+    visit(tree);
+    setCollapsed(next);
   },[tree]);
   const toggleNode=id=>setCollapsed(current=>{
     const next=new Set(current);
@@ -1508,7 +1659,11 @@ function TreeInspector({snapshot,onRefresh,onPasteContinuation}){
           style={{paddingLeft:10+level*16}}
           title={treeNodeSummary(node,exec)}
           onClick={hasChildren?()=>toggleNode(key):undefined}
-          onDoubleClick={isContinuationNode(node)&&pasteText?()=>onPasteContinuation?.(pasteText):undefined}
+          onDoubleClick={event=>{
+            event.stopPropagation();
+            if(isContinuationNode(node)&&pasteText)onPasteContinuation?.(pasteText);
+            onOpenObject?.(getTreeObjectRhoText(node,exec));
+          }}
         >
           <span className="tree-toggle" aria-hidden="true">{hasChildren?(closed?'▸':'▾'):'•'}</span>
           <span className="tree-label">{node.label||'/'}</span>
@@ -1606,7 +1761,7 @@ function DebugInspector({snapshot,onRefresh,onAction,output,onClearConsole,onPas
   </div>;
 }
 
-function KaiConsolePanel({view,rhoMirror,onMirrorChange,piDraft,onConsumePiDraft,onPasteContinuation}){
+function KaiConsolePanel({view,rhoMirror,onMirrorChange,rhoDraft,onConsumeRhoDraft,piDraft,onConsumePiDraft,onPasteContinuation,onOpenTreeObject}){
   const title=view==='debugger'?'Debugger':view==='tree'?'Tree':view==='rho'?'Rho':'Pi';
   const prompt=view==='rho'?'ρ>':'π>';
   const [output,setOutput]=useState('');
@@ -1683,6 +1838,13 @@ function KaiConsolePanel({view,rhoMirror,onMirrorChange,piDraft,onConsumePiDraft
     setHi(-1);
     onConsumePiDraft?.();
   },[view,piDraft,onConsumePiDraft]);
+  useEffect(()=>{
+    if(view!=='rho'||!rhoDraft)return;
+    setInp(rhoDraft);
+    setHi(-1);
+    onMirrorChange?.(rhoDraft);
+    onConsumeRhoDraft?.();
+  },[view,rhoDraft,onMirrorChange,onConsumeRhoDraft]);
 
   return(
     <div className="kai-panel">
@@ -1692,7 +1854,7 @@ function KaiConsolePanel({view,rhoMirror,onMirrorChange,piDraft,onConsumePiDraft
         <button className="btn bg" style={{fontSize:10,padding:'3px 7px'}} onClick={()=>setOutput('')}>Clear</button>
         <span className={status==='connected'?'on':'off'}>{status}</span>
       </div>
-      {view==='tree' ? <TreeInspector snapshot={treeSnapshot} onRefresh={refreshExecutors} onPasteContinuation={onPasteContinuation}/>
+      {view==='tree' ? <TreeInspector snapshot={treeSnapshot} onRefresh={refreshExecutors} onPasteContinuation={onPasteContinuation} onOpenObject={onOpenTreeObject}/>
       : view==='debugger' ? <DebugInspector snapshot={treeSnapshot} onRefresh={refreshExecutors} onAction={debugAction} output={output} onClearConsole={()=>setOutput('')} onPasteContinuation={onPasteContinuation}/>
       : view==='rho' ? (
         <RhoEditorPanel
@@ -2329,6 +2491,8 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState([]);
+  const [attachedImages, setAttachedImages] = useState([]);
+  const [dragActive, setDragActive] = useState(false);
   const [pendingAction, setPendingAction] = useState(null);
   const [progressDelaySeconds, setProgressDelaySeconds] = useState(3);
   const [memoryFacts, setMemoryFacts] = useState([]);
@@ -2542,7 +2706,7 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
   };
 
   const send = async () => {
-    if (!input.trim() && attachedFiles.length === 0) return;
+    if (!input.trim() && attachedFiles.length === 0 && attachedImages.length === 0) return;
     if (streaming || pendingAction) return;
 
     // build context from attached files
@@ -2559,12 +2723,17 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
       }
     }
 
+    if(attachedImages.length){
+      context += attachedImages.map(image=>`\n\n${imageContext(image)}`).join('');
+    }
+
     const userContent = context ? `${input}\n${context}` : input;
     const displayMsg = {
       role: 'user',
       content: input,
       fullContent: userContent,
-      files: [...attachedFiles]
+      files: [...attachedFiles],
+      images: [...attachedImages]
     };
 
     setMessages(m => [...m, displayMsg]);
@@ -2572,6 +2741,7 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
     setChatHistoryIndex(-1);
     chatDraftRef.current='';
     setAttachedFiles([]);
+    setAttachedImages([]);
 
     const directCd=/^cd(?:\s.*)?$/.test(input.trim());
     if(directCd&&!context){
@@ -2636,6 +2806,47 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
     }
   };
 
+  const addDroppedImages = useCallback(async dataTransfer => {
+    const files=[...dataTransfer.files].filter(file=>file.type.startsWith('image/'));
+    const images=(await Promise.all(files.map(fileToChatImage))).filter(Boolean);
+    const urlText=dataTransfer.getData('text/uri-list') || dataTransfer.getData('text/plain');
+    const html=dataTransfer.getData('text/html');
+    const htmlSrc=(html.match(/<img[^>]+src=["']([^"']+)["']/i)||[])[1];
+    const urlImage=imageUrlToChatImage(htmlSrc || urlText.split('\n').find(line=>!line.startsWith('#')));
+    if(urlImage && !images.some(image=>image.src===urlImage.src))images.push(urlImage);
+    if(!images.length)return false;
+    setAttachedImages(current=>{
+      const seen=new Set(current.map(image=>image.src));
+      return [...current,...images.filter(image=>!seen.has(image.src))];
+    });
+    focusChatInput();
+    return true;
+  }, [focusChatInput]);
+
+  const onChatDragOver = event => {
+    if(streaming||pendingAction)return;
+    const hasImage=[...event.dataTransfer.items].some(item=>
+      item.kind==='file' ? item.type.startsWith('image/') : ['text/uri-list','text/html','text/plain'].includes(item.type)
+    );
+    if(!hasImage)return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect='copy';
+    setDragActive(true);
+  };
+  const onChatDragLeave = event => {
+    if(!event.currentTarget.contains(event.relatedTarget))setDragActive(false);
+  };
+  const onChatDrop = async event => {
+    if(streaming||pendingAction)return;
+    event.preventDefault();
+    setDragActive(false);
+    try{
+      await addDroppedImages(event.dataTransfer);
+    }catch(error){
+      setMessages(current=>[...current,{role:'assistant',content:chatErrorMessage(error)}]);
+    }
+  };
+
   const clearMemory = async () => {
     if(!window.confirm('Clear saved conversation memory?'))return;
     localStorage.removeItem(CHAT_MEMORY_KEY);
@@ -2654,7 +2865,10 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
   };
 
   return (
-    <div className="main">
+    <div className={`main${dragActive?' chat-drag-active':''}`}
+      onDragOver={onChatDragOver}
+      onDragLeave={onChatDragLeave}
+      onDrop={onChatDrop}>
       <MemoryFactsEditor
         open={memoryEditorOpen}
         initialFacts={memoryFacts}
@@ -2677,6 +2891,20 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
                   {msg.files.map(fp => (
                     <div key={fp} className="file-pill" style={{ margin: 0, opacity: 0.8 }}>
                       <span>📄 {fp.split('/').pop()}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {msg.images && msg.images.length > 0 && (
+                <div className="chat-image-strip">
+                  {msg.images.map(image => (
+                    <div key={image.id||image.src} className="chat-image">
+                      <img src={image.src} alt={image.name||'image'} draggable="true"
+                        onDragStart={event=>dragImageTransfer(event,image)}
+                        onDoubleClick={()=>openChatImage(image).catch(error=>
+                          setMessages(current=>[...current,{role:'assistant',content:chatErrorMessage(error)}])
+                        )}/>
+                      <div className="chat-image-caption" title={image.name}>{image.name||'image'}</div>
                     </div>
                   ))}
                 </div>
@@ -2724,6 +2952,7 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
       </div>
 
       <div className="chat-input-area">
+        <div className="chat-drop-hint">Drop images to attach them to this chat.</div>
         <div className="chat-memory-bar">
           <span>Memory: </span>
           <button className="chat-memory-link" onClick={()=>setChatHistoryEditorOpen(true)}
@@ -2748,6 +2977,22 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
             ))}
           </div>
         )}
+        {attachedImages.length > 0 && (
+          <div className="chat-image-strip">
+            {attachedImages.map(image => (
+              <div key={image.id||image.src} className="chat-image">
+                <img src={image.src} alt={image.name||'image'} draggable="true"
+                  onDragStart={event=>dragImageTransfer(event,image)}
+                  onDoubleClick={()=>openChatImage(image).catch(error=>
+                    setMessages(current=>[...current,{role:'assistant',content:chatErrorMessage(error)}])
+                  )}/>
+                <div className="chat-image-caption" title={image.name}>{image.name||'image'}</div>
+                <button className="chat-image-remove" title="Remove"
+                  onClick={() => setAttachedImages(images => images.filter(item => item !== image))}>×</button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="chat-input-row">
           <textarea
             ref={taRef}
@@ -2760,7 +3005,7 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
           />
           <button className="btn btn-primary"
             onClick={streaming?()=>abortRef.current?.abort():send}
-            disabled={Boolean(pendingAction)||(!streaming&&!input.trim()&&attachedFiles.length===0)}>
+            disabled={Boolean(pendingAction)||(!streaming&&!input.trim()&&attachedFiles.length===0&&attachedImages.length===0)}>
             {streaming ? 'Stop' : '↑'}
           </button>
         </div>
@@ -2820,6 +3065,7 @@ function App() {
   const [rightWidth, setRightWidth] = useState(() => Number(localStorage.getItem('glm-right-width')) || 520);
   const [resizing, setResizing] = useState(false);
   const [rhoMirror, setRhoMirror] = useState('');
+  const [rhoDraft, setRhoDraft] = useState('');
   const [piDraft, setPiDraft] = useState('');
   const [cwd, setCwd]             = useState('');
   const [root, setRoot]           = useState('');
@@ -2966,6 +3212,11 @@ function App() {
     setPiDraft(value);
     setRtab('pi');
   };
+  const openTreeObjectInRho = value => {
+    setRhoDraft(value);
+    setRhoMirror(value);
+    setRtab('rho');
+  };
 
   const resizeRight = (event) => {
     event.preventDefault();
@@ -3038,9 +3289,12 @@ function App() {
               view={rtab}
               rhoMirror={rhoMirror}
               onMirrorChange={setRhoMirror}
+              rhoDraft={rhoDraft}
+              onConsumeRhoDraft={()=>setRhoDraft('')}
               piDraft={piDraft}
               onConsumePiDraft={()=>setPiDraft('')}
               onPasteContinuation={pasteContinuationToPi}
+              onOpenTreeObject={openTreeObjectInRho}
             />}
           </div>
         </div>

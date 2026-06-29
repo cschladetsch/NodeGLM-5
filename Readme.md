@@ -18,7 +18,7 @@ flowchart LR
     Kai["CppKAI runtime (Pi, Rho, Debug, Tree)"]
 
     Browser <-->|HTTP and SSE| Server
-    Browser <-->|WebSocket api/kai| Server
+    Browser <-->|WebSocket bridge| Server
     Server <-->|models and chat completions| Model
     Server <-->|validated paths| Files
     Server <-->|read and write learned facts| Memory
@@ -29,7 +29,9 @@ flowchart LR
 The browser has no direct filesystem access. `server.js` validates file paths,
 tracks each browser session's working directory and selected model, extracts
 explicit user facts into persisted memory, proxies model traffic, and starts
-local subprocesses. `index.html` contains the client UI.
+local subprocesses. `index.html` contains the client UI. The complete HTTP,
+SSE, NDJSON, WebSocket, static route, and upstream model API reference is
+maintained in [API.md](API.md).
 
 ## Requirements
 
@@ -150,7 +152,7 @@ flowchart TD
     Session --> Prompt["Build memory system message"]
     Prompt --> Model["OpenAI-compatible chat completion"]
     Clear["Clear memory button"] --> ClearLocal["Remove browser transcript"]
-    Clear --> ClearServer["POST /api/memory/clear"]
+    Clear --> ClearServer["Clear server fact memory"]
     ClearServer --> Store
 ```
 
@@ -180,13 +182,13 @@ sequenceDiagram
     participant Local as Filesystem or Bash
 
     User->>UI: Send request
-    UI->>API: POST /api/chat
+    UI->>API: Send chat request
     API->>API: Extract and persist explicit facts
     API->>API: Add memory system message when facts exist
     API->>LLM: Stream chat completion
     LLM-->>UI: Tool request via SSE
     alt read_file
-        UI->>API: POST /api/tool/read_file
+        UI->>API: Read requested file
         API->>Local: Read validated path
         Local-->>UI: File content
     else bash or write_file
@@ -262,30 +264,12 @@ The model selector lists models returned by the active endpoint. Selecting a
 model changes only the current browser session; it does not install or load a
 model on the inference server.
 
-## HTTP API
+## API
 
-| Method and path | Purpose |
-|---|---|
-| `POST /api/chat` | Proxy a streaming chat completion as server-sent events |
-| `GET /api/models` | List models installed at the inference endpoint |
-| `POST /api/session/model` | Select a model for one session |
-| `GET /api/session` | Return the session directory, model, root, and fact memory |
-| `GET /api/memory` | Return the persisted fact memory for a session |
-| `POST /api/memory/clear` | Clear persisted fact memory for all active sessions |
-| `POST /api/tool/bash` | Run an approved agent command and update session cwd |
-| `POST /api/tool/read_file` | Read an agent-requested file |
-| `POST /api/tool/write_file/diff` | Preview an agent-requested write |
-| `POST /api/tool/write_file/confirm` | Apply an approved agent write |
-| `POST /api/repl/exec` | Execute a one-shot Bash REPL command |
-| `GET /api/fs/list` | List a browser directory |
-| `GET /api/fs/read` | Read a file for the browser editor |
-| `POST /api/fs/write` | Save browser editor content |
-| `GET /api/modelstore` | Report locally cached ModelStore entries |
-| `GET /api/health` | Check the model endpoint and report active settings |
-| `WS /api/kai?sid=...` | Attach the browser to its session-owned CppKAI runtime |
-
-Session identifiers may contain letters, digits, `.`, `_`, and `-`, with a
-maximum length of 128 characters.
+See [API.md](API.md) for the complete NodeGLM API reference, including HTTP
+endpoints, Server-Sent Events, model-install NDJSON, the CppKAI WebSocket
+protocol, static routes, request/response shapes, status codes, limits, and the
+upstream OpenAI-compatible model API contract.
 
 ## CppKAI Runtime Views
 

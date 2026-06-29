@@ -18,6 +18,7 @@ const KAI_DIR=process.env.KAI_DIR    ||path.join(__dirname,'Ext/CppKAI');
 const ENET_DIR=process.env.ENET_DIR  ||path.join(__dirname,'Ext/ENet');
 const KAI_CONSOLE=process.env.KAI_CONSOLE||path.join(KAI_DIR,'Bin/Console');
 const MEMORY_FILE=process.env.NODEGLM_MEMORY_FILE||path.join(ROOT,'.nodeglm-memory.json');
+const OPEN_IMAGE_MAX_BYTES=8*1024*1024;
 const RECOMMENDED_MODELS=[
   {id:'qwen2.5-coder:1.5b',label:'Qwen Coder 1.5B',vram:'~2-3 GB',ram:'~4 GB',fit:'Lowest memory coding fallback'},
   {id:'qwen2.5-coder:3b',label:'Qwen Coder 3B',vram:'~3-5 GB',ram:'~6 GB',fit:'Small coding model'},
@@ -294,6 +295,67 @@ function run(cmd,cwd,timeout=20000){
       resolve({stdout:index>=0?output.slice(0,index):output,stderr:stderr||'',
         exitCode:error?(error.code??1):0,cwd:finalCwd});
     }));
+}
+
+function imageExtension(mime){
+  return ({
+    'image/png':'png',
+    'image/jpeg':'jpg',
+    'image/jpg':'jpg',
+    'image/gif':'gif',
+    'image/webp':'webp',
+    'image/svg+xml':'svg',
+    'image/bmp':'bmp',
+  })[String(mime||'').toLowerCase()]||'img';
+}
+
+function safeImageName(name){
+  return String(name||'chat-image')
+    .replace(/[^\w.-]+/g,'-')
+    .replace(/^[.-]+|[.-]+$/g,'')
+    .slice(0,80)||'chat-image';
+}
+
+function openNativeTarget(target){
+  const commands=process.platform==='darwin'
+    ? [['open',[target]]]
+    : process.platform==='win32'
+      ? [['cmd.exe',['/c','start','',target]]]
+      : [
+          ...(process.env.WSL_DISTRO_NAME?[['wslview',[target]]]:[]),
+          ['xdg-open',[target]],
+          ['gio',['open',target]],
+        ];
+  return new Promise((resolve,reject)=>{
+    let index=0;
+    const tryNext=()=>{
+      const entry=commands[index++];
+      if(!entry)return reject(new Error('No native opener is available'));
+      const [command,args]=entry;
+      const child=spawn(command,args,{detached:true,stdio:'ignore'});
+      child.once('error',tryNext);
+      child.once('spawn',()=>{
+        child.unref();
+        resolve({command});
+      });
+    };
+    tryNext();
+  });
+}
+
+function writeTempImage(src,name){
+  const match=String(src||'').match(/^data:(image\/[a-z0-9.+-]+);base64,([\s\S]+)$/i);
+  if(!match)throw new Error('Only base64 data image URLs can be opened as local files');
+  const mime=match[1].toLowerCase();
+  const data=Buffer.from(match[2],'base64');
+  if(!data.length)throw new Error('Image is empty');
+  if(data.length>OPEN_IMAGE_MAX_BYTES)throw new Error('Image is larger than 8 MB');
+  const ext=imageExtension(mime);
+  const base=safeImageName(name).replace(/\.[^.]+$/,'');
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nodeglm-image-'));
+  const file=path.join(dir,`${base}.${ext}`);
+  fs.writeFileSync(file,data);
+  return {file,mime,size:data.length};
 }
 
 // ModelStore
@@ -683,6 +745,20 @@ app.post('/api/fs/write',(req,res)=>{
   }catch(e){res.status(400).json({error:e.message});}
 });
 
+app.post('/api/open/image',async(req,res)=>{
+  try{
+    const {src,name}=req.body||{};
+    if(typeof src!=='string'||!src)return res.status(400).json({error:'src required'});
+    if(/^https?:\/\//i.test(src)){
+      const opened=await openNativeTarget(src);
+      return res.json({ok:true,target:src,opened});
+    }
+    const image=writeTempImage(src,name);
+    const opened=await openNativeTarget(image.file);
+    res.json({ok:true,path:image.file,mime:image.mime,size:image.size,opened});
+  }catch(e){res.status(400).json({error:e.message});}
+});
+
 app.get('/api/health',(_req,res)=>{
   const url=new URL('/v1/models',OLLAMA);
   const transport=url.protocol==='https:'?https:http;
@@ -945,4 +1021,5 @@ if(require.main===module){
 
 module.exports={app,server,safe,validSessionId,selectSessionModel,readUiConfig,
   parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,extractMemoryFacts,addMemoryFacts,memoryPrompt,
-  modelInfo,RECOMMENDED_MODELS,isInstallableModel,cleanInstallOutput,installStatusText};
+  modelInfo,RECOMMENDED_MODELS,isInstallableModel,cleanInstallOutput,installStatusText,
+  imageExtension,safeImageName,writeTempImage};

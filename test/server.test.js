@@ -8,7 +8,8 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'glm-code-test-'));
 process.env.SAFE_ROOT = root;
 const {app, safe, validSessionId, selectSessionModel, readUiConfig,
   parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,
-  extractMemoryFacts,addMemoryFacts,memoryPrompt,modelInfo,RECOMMENDED_MODELS,isInstallableModel,cleanInstallOutput,installStatusText} = require('../server');
+  extractMemoryFacts,addMemoryFacts,memoryPrompt,modelInfo,RECOMMENDED_MODELS,isInstallableModel,cleanInstallOutput,installStatusText,
+  imageExtension,safeImageName,writeTempImage} = require('../server');
 
 test.after(() => {
   fs.rmSync(root, {recursive:true, force:true});
@@ -66,6 +67,20 @@ test('UI config endpoint returns the validated request progress threshold', asyn
   assert.equal(response.statusCode,200);
   assert.deepEqual(response.body,readUiConfig());
   assert.equal(typeof response.body.requestProgressDelaySeconds,'number');
+});
+
+test('image open endpoint can materialize chat images as local temp files', () => {
+  const layer = app._router.stack.find(entry =>
+    entry.route && entry.route.path === '/api/open/image' && entry.route.methods.post);
+  assert.ok(layer, 'POST /api/open/image exists');
+  assert.equal(imageExtension('image/png'),'png');
+  assert.equal(safeImageName('../bad name.png'),'bad-name.png');
+  const image=writeTempImage('data:image/png;base64,aGVsbG8=','hello.png');
+  assert.equal(image.mime,'image/png');
+  assert.equal(image.size,5);
+  assert.equal(path.extname(image.file),'.png');
+  assert.equal(fs.readFileSync(image.file,'utf8'),'hello');
+  fs.rmSync(path.dirname(image.file),{recursive:true,force:true});
 });
 
 test('VRAM parser summarizes app and overall GPU memory', () => {
