@@ -2,22 +2,22 @@ const express=require('express'),cors=require('cors'),fs=require('fs'),path=requ
 const {exec,spawn,execFile}=require('child_process');
 const Diff=require('diff');
 
-const OLLAMA=process.env.GLM_BASE_URL||'http://localhost:11434';
+const OLLAMA=process.env.KAI_WORKBENCH_BASE_URL||'http://localhost:11434';
 const ROOT  =fs.realpathSync(path.resolve(process.env.SAFE_ROOT||process.env.HOME||'/tmp'));
 const PORT  =process.env.PORT        ||3001;
 const HOST  =process.env.HOST        ||'127.0.0.1';
-const DEFAULT_MODEL=process.env.GLM_MODEL||'qwen2.5-coder:7b';
+const DEFAULT_MODEL=process.env.KAI_WORKBENCH_MODEL||'qwen2.5-coder:7b';
 const MODEL_CACHE_ROOT=process.env.MODEL_CACHE_ROOT||path.join(os.homedir(),'.models');
 const OLLAMA_MODELS=process.env.OLLAMA_MODELS||path.join(MODEL_CACHE_ROOT,'ollama');
-const GLM_TIMEOUT_MS=Math.max(1000,Number(process.env.GLM_TIMEOUT_MS)||120000);
-const GLM_FIRST_BYTE_TIMEOUT_MS=Math.max(1000,Number(process.env.GLM_FIRST_BYTE_TIMEOUT_MS)||90000);
-const GLM_MAX_TOKENS=Math.max(256,Number(process.env.GLM_MAX_TOKENS)||4096);
-const GLM_HISTORY_MESSAGES=Math.max(4,Number(process.env.GLM_HISTORY_MESSAGES)||40);
+const KAI_WORKBENCH_TIMEOUT_MS=Math.max(1000,Number(process.env.KAI_WORKBENCH_TIMEOUT_MS)||120000);
+const KAI_WORKBENCH_FIRST_BYTE_TIMEOUT_MS=Math.max(1000,Number(process.env.KAI_WORKBENCH_FIRST_BYTE_TIMEOUT_MS)||90000);
+const KAI_WORKBENCH_MAX_TOKENS=Math.max(256,Number(process.env.KAI_WORKBENCH_MAX_TOKENS)||4096);
+const KAI_WORKBENCH_HISTORY_MESSAGES=Math.max(4,Number(process.env.KAI_WORKBENCH_HISTORY_MESSAGES)||40);
 const MS_DIR=process.env.MS_DIR      ||path.join(os.homedir(),'local/repos/CppLmmModelStore');
 const KAI_DIR=process.env.KAI_DIR    ||path.join(__dirname,'Ext/CppKAI');
 const ENET_DIR=process.env.ENET_DIR  ||path.join(__dirname,'Ext/ENet');
 const KAI_CONSOLE=process.env.KAI_CONSOLE||path.join(KAI_DIR,'Bin/Console');
-const MEMORY_FILE=process.env.NODEGLM_MEMORY_FILE||path.join(ROOT,'.nodeglm-memory.json');
+const MEMORY_FILE=process.env.KAI_WORKBENCH_MEMORY_FILE||path.join(ROOT,'.kaiworkbench-memory.json');
 const OPEN_IMAGE_MAX_BYTES=8*1024*1024;
 const RECOMMENDED_MODELS=[
   {id:'qwen2.5-coder:1.5b',label:'Qwen Coder 1.5B',vram:'~2-3 GB',ram:'~4 GB',fit:'Lowest memory coding fallback'},
@@ -39,7 +39,7 @@ function readUiConfig(configPath=path.join(__dirname,'ui-config.json')){
 const UI_CONFIG=readUiConfig();
 
 const app=express();
-const allowedOrigins=new Set((process.env.GLM_ALLOWED_ORIGINS||
+const allowedOrigins=new Set((process.env.KAI_WORKBENCH_ALLOWED_ORIGINS||
   `http://localhost:${PORT},http://127.0.0.1:${PORT},null`).split(',').map(value=>value.trim()));
 app.use(cors({origin(origin,callback){
   if(!origin||allowedOrigins.has(origin))return callback(null,true);
@@ -121,7 +121,7 @@ function summarizeVram(gpus,processes,relatedPids,includeLocalOllama){
   return {
     available:true,
     source:'nvidia-smi',
-    appScope:includeLocalOllama?'NodeGLM process tree plus local Ollama':'NodeGLM process tree',
+    appScope:includeLocalOllama?'KaiWorkbench process tree plus local Ollama':'KaiWorkbench process tree',
     gpus:rows,
     total:rows.reduce((total,gpu)=>({
       appUsedMiB:total.appUsedMiB+gpu.appUsedMiB,
@@ -285,8 +285,8 @@ function safe(p, baseCwd){
 }
 
 function run(cmd,cwd,timeout=20000){
-  const marker=`__NODEGLM_CWD_${crypto.randomBytes(12).toString('hex')}__`;
-  const wrapped=`${cmd}\n_nodeglm_status=$?\nprintf '\\n${marker}%s\\n' "$PWD"\nexit "$_nodeglm_status"`;
+  const marker=`__KAI_WORKBENCH_CWD_${crypto.randomBytes(12).toString('hex')}__`;
+  const wrapped=`${cmd}\n_kaiworkbench_status=$?\nprintf '\\n${marker}%s\\n' "$PWD"\nexit "$_kaiworkbench_status"`;
   return new Promise(resolve=>exec(wrapped,{cwd,timeout,maxBuffer:2*1024*1024,shell:'/bin/bash'},
     (error,stdout,stderr)=>{
       const output=stdout||'';
@@ -352,7 +352,7 @@ function writeTempImage(src,name){
   if(data.length>OPEN_IMAGE_MAX_BYTES)throw new Error('Image is larger than 8 MB');
   const ext=imageExtension(mime);
   const base=safeImageName(name).replace(/\.[^.]+$/,'');
-  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'nodeglm-image-'));
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'kaiworkbench-image-'));
   const file=path.join(dir,`${base}.${ext}`);
   fs.writeFileSync(file,data);
   return {file,mime,size:data.length};
@@ -373,11 +373,11 @@ app.get('/api/modelstore',(_req,res)=>{
 });
 
 // System prompt — helpful conversational assistant
-const SYSTEM=`You are GLM-Code, a helpful, precise, and expert conversational software engineering assistant.
+const SYSTEM=`You are KaiWorkbench, a helpful, precise, and expert conversational software engineering assistant.
 You answer questions, explain code, and provide clear guidance on software development.
 When writing code, explain your design and provide complete, functional code blocks using standard markdown code fences (e.g. \`\`\`javascript).
 
-NodeGLM is a self-hosted development environment: the project visible in the current workspace is the application running this conversation. Treat requests to improve "this project" or "your interface" as requests to inspect, modify, and test that workspace rather than as abstract advice.
+KaiWorkbench is a self-hosted development environment: the project visible in the current workspace is the application running this conversation. Treat requests to improve "this project" or "your interface" as requests to inspect, modify, and test that workspace rather than as abstract advice.
 
 Answer ordinary conversation and stable general-knowledge questions directly when you know the answer confidently. Use a network-capable tool when the user asks for a lookup, the information may have changed, or verification would materially improve the answer. Do not reach for a tool merely because a factual question was asked.
 
@@ -410,7 +410,7 @@ app.post('/api/chat',(req,res)=>{
   if(!last||typeof last.content!=='string')
     return res.status(400).json({error:'last message must have string content'});
   addMemoryFacts(s,extractMemoryFacts(last.content),true);
-  const recent=messages.slice(-GLM_HISTORY_MESSAGES);
+  const recent=messages.slice(-KAI_WORKBENCH_HISTORY_MESSAGES);
   const augmented=[...recent.slice(0,-1),
     {...last,content:last.content+`\n\n[cwd: ${s.cwd}]`}];
   const systemMessages=[{role:'system',content:SYSTEM}];
@@ -420,7 +420,7 @@ app.post('/api/chat',(req,res)=>{
     model:s.model,
     messages:[...systemMessages,...augmented],
     temperature:0.1,
-    max_tokens:GLM_MAX_TOKENS,
+    max_tokens:KAI_WORKBENCH_MAX_TOKENS,
     stream:true,
   });
   const url=new URL('/v1/chat/completions',OLLAMA);
@@ -430,9 +430,9 @@ app.post('/api/chat',(req,res)=>{
   const transport=url.protocol==='https:'?https:http;
   let ended=false,upstreamBytes=0,up;
   let firstByteTimer=setTimeout(()=>{
-    fail(`Model did not start streaming within ${GLM_FIRST_BYTE_TIMEOUT_MS} ms. The selected model may still be loading or may be too large for available memory.`);
+    fail(`Model did not start streaming within ${KAI_WORKBENCH_FIRST_BYTE_TIMEOUT_MS} ms. The selected model may still be loading or may be too large for available memory.`);
     up?.destroy();
-  },GLM_FIRST_BYTE_TIMEOUT_MS);
+  },KAI_WORKBENCH_FIRST_BYTE_TIMEOUT_MS);
   firstByteTimer.unref?.();
   const clearFirstByteTimer=()=>{
     if(firstByteTimer){clearTimeout(firstByteTimer);firstByteTimer=null;}
@@ -464,7 +464,7 @@ app.post('/api/chat',(req,res)=>{
         if(!res.writableEnded){ended=true;res.end();}
       });
     });
-  up.setTimeout(GLM_TIMEOUT_MS,()=>up.destroy(new Error(`Model request timed out after ${GLM_TIMEOUT_MS} ms`)));
+  up.setTimeout(KAI_WORKBENCH_TIMEOUT_MS,()=>up.destroy(new Error(`Model request timed out after ${KAI_WORKBENCH_TIMEOUT_MS} ms`)));
   up.on('error',error=>fail(error.message));
   res.on('close',()=>{if(!res.writableEnded&&!ended){clearFirstByteTimer();up.destroy();}});
   up.write(payload);up.end();
@@ -983,7 +983,7 @@ server.on('upgrade',(req,socket,head)=>{
         const id=String(parsed.id||'');
         if(!validRequestId(id))return send('error','Invalid request id');
         if(!runtime.register(id,socket))return send('error','Duplicate request id');
-        runtime.proc.stdio[3].write(`__nodeglm_tree__ ${id}\n`);
+        runtime.proc.stdio[3].write(`__kai_inspect_tree__ ${id}\n`);
       }else if(parsed.type==='debug_action'&&runtime.proc){
         const requestId=String(parsed.id||'');
         const id=String(parsed.executorId||'');
@@ -992,7 +992,7 @@ server.on('upgrade',(req,socket,head)=>{
           send('error','Invalid Executor debug action');continue;
         }
         if(!runtime.register(requestId,socket))return send('error','Duplicate request id');
-        runtime.proc.stdio[3].write(`__nodeglm_debug__ ${requestId} ${id} ${action}\n`);
+        runtime.proc.stdio[3].write(`__kai_debug_action__ ${requestId} ${id} ${action}\n`);
       }else if(parsed.type==='stop'&&runtime.proc){
         runtime.stop();
       }
@@ -1011,12 +1011,12 @@ app.use((error,_req,res,_next)=>{
 if(require.main===module){
   server.on('error',error=>{
     if(error.code==='EADDRINUSE'){
-      console.error(`Port ${PORT} is already in use. Stop the existing NodeGLM server or set PORT to another value.`);
+      console.error(`Port ${PORT} is already in use. Stop the existing KaiWorkbench server or set PORT to another value.`);
       process.exit(1);
     }
     throw error;
   });
-  server.listen(PORT,HOST,()=>console.log(`  glm-code http://${HOST}:${PORT}  model=${DEFAULT_MODEL}  root=${ROOT}`));
+  server.listen(PORT,HOST,()=>console.log(`  kai-workbench http://${HOST}:${PORT}  model=${DEFAULT_MODEL}  root=${ROOT}`));
 }
 
 module.exports={app,server,safe,validSessionId,selectSessionModel,readUiConfig,

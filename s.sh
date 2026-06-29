@@ -8,19 +8,19 @@ import sys
 path = sys.argv[1]
 content = open(path).read()
 
-old_case = '''case "$GLM_BASE_URL" in
+old_case = '''case "$KAI_WORKBENCH_BASE_URL" in
     http://localhost:11434|http://127.0.0.1:11434) ;;
     *) return ;;
   esac'''
 
-new_case = '''case "$GLM_BASE_URL" in
+new_case = '''case "$KAI_WORKBENCH_BASE_URL" in
     http://localhost:11434|http://localhost:11434/v1|\
     http://127.0.0.1:11434|http://127.0.0.1:11434/v1) ;;
     *) return ;;
   esac
-  OLLAMA_BASE="${GLM_BASE_URL%/v1}"'''
+  OLLAMA_BASE="${KAI_WORKBENCH_BASE_URL%/v1}"'''
 
-old_health = '"$GLM_BASE_URL/api/version"'
+old_health = '"$KAI_WORKBENCH_BASE_URL/api/version"'
 new_health = '"$OLLAMA_BASE/api/version"'
 
 assert old_case in content, "Could not find case block -- already patched or changed?"

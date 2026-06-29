@@ -31,7 +31,7 @@ test('CppKAI inspection uses correlated duplex control I/O',
         };
         child.stdio[3].on('data',finish);
         child.once('error',reject);
-        setTimeout(()=>child.stdio[3].write('__nodeglm_tree__ Request-A1\n'),100);
+        setTimeout(()=>child.stdio[3].write('__kai_inspect_tree__ Request-A1\n'),100);
       });
       const response=JSON.parse(control.trim());
       assert.equal(response.id,'Request-A1');
@@ -42,7 +42,7 @@ test('CppKAI inspection uses correlated duplex control I/O',
         assert.ok(Array.isArray(response.executors[0].dataStack));
         assert.ok(Array.isArray(response.executors[0].contextStack));
       }
-      assert.doesNotMatch(stdout,/__nodeglm_tree__|NODEGLM_TREE_BEGIN/);
+      assert.doesNotMatch(stdout,/__kai_inspect_tree__|KAI_TREE_BEGIN/);
     }finally{
       child.kill('SIGTERM');
       await new Promise(resolve=>child.once('close',resolve));

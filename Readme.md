@@ -1,6 +1,6 @@
-# NodeGLM-5 Code Console
+# KaiWorkbench Code Console
 
-NodeGLM-5 is a local, browser-based coding workspace for OpenAI-compatible
+KaiWorkbench is a local, browser-based coding workspace for OpenAI-compatible
 inference servers. It combines streamed chat, an approval-gated agent tool loop,
 a filesystem browser, an Ace editor, a Bash REPL, and optional CppKAI language
 consoles in one page.
@@ -53,7 +53,7 @@ Ollama so those memory settings take effect.
 
 ```bash
 git clone --recurse-submodules <repository-url>
-cd NodeGLM-5
+cd KaiWorkbench
 npm install
 ```
 
@@ -69,15 +69,15 @@ The launcher creates the configured model-cache directories, starts a local
 Ollama server when necessary, checks that the selected Ollama model is installed,
 stops an existing `node server.js` process, and then runs the application. It
 opens the UI in a standalone browser window when the server becomes ready and
-uses this repository as the default workspace, allowing NodeGLM to inspect and
+uses this repository as the default workspace, allowing KaiWorkbench to inspect and
 modify its own implementation:
 
 ```bash
 ./s
 ```
 
-Set `NODEGLM_NO_WINDOW=1` to disable automatic window creation, or set
-`NODEGLM_BROWSER` to a browser executable that supports `--app`. The page may
+Set `KAI_WORKBENCH_NO_WINDOW=1` to disable automatic window creation, or set
+`KAI_WORKBENCH_BROWSER` to a browser executable that supports `--app`. The page may
 also be opened directly from `index.html`; the server must still be running and
 the default CORS policy must allow the resulting `null` origin.
 
@@ -90,8 +90,8 @@ npm start
 To use another inference server or workspace root:
 
 ```bash
-GLM_BASE_URL=http://127.0.0.1:30000 \
-GLM_MODEL=GLM-5.2 \
+KAI_WORKBENCH_BASE_URL=http://127.0.0.1:30000 \
+KAI_WORKBENCH_MODEL=qwen2.5-coder:7b \
 SAFE_ROOT=/home/user/projects \
 npm start
 ```
@@ -100,7 +100,7 @@ For example, an SGLang endpoint can be started separately with:
 
 ```bash
 python -m sglang.launch_server \
-  --model-path zai-org/GLM-5.2-FP8 \
+  --model-path qwen2.5-coder:7b \
   --port 30000
 ```
 
@@ -129,12 +129,12 @@ restarts.
 
 ## Memory
 
-NodeGLM keeps two different forms of memory:
+KaiWorkbench keeps two different forms of memory:
 
 - **Conversation memory:** the browser stores up to 100 stable chat messages in
   `localStorage` so a page reload does not erase the visible transcript.
 - **Fact memory:** the server extracts explicit personal facts from user
-  messages, stores them in `.nodeglm-memory.json` under `SAFE_ROOT`, and injects
+  messages, stores them in `.kaiworkbench-memory.json` under `SAFE_ROOT`, and injects
   them into future model requests as a separate system message.
 
 Fact extraction is intentionally conservative. It captures forms such as
@@ -157,7 +157,7 @@ flowchart TD
 ```
 
 Only explicit user-provided facts are stored. The memory file is ignored by Git
-to avoid accidentally committing personal data. Set `NODEGLM_MEMORY_FILE` to
+to avoid accidentally committing personal data. Set `KAI_WORKBENCH_MEMORY_FILE` to
 move the persisted fact store elsewhere.
 
 ## Agent Tool Flow
@@ -235,17 +235,17 @@ before its spinner, progress bar, and elapsed timer appear.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `GLM_BASE_URL` | `http://localhost:11434` | OpenAI-compatible endpoint base URL |
-| `GLM_MODEL` | `qwen2.5-coder:7b` | Initial model for new sessions |
-| `GLM_TIMEOUT_MS` | `120000` | Chat request timeout; minimum 1000 ms |
-| `GLM_FIRST_BYTE_TIMEOUT_MS` | `90000` | Time allowed for a model stream to begin; minimum 1000 ms |
-| `GLM_MAX_TOKENS` | `4096` | Completion token limit; minimum 256 |
-| `GLM_HISTORY_MESSAGES` | `40` | Recent chat messages forwarded; minimum 4 |
+| `KAI_WORKBENCH_BASE_URL` | `http://localhost:11434` | OpenAI-compatible endpoint base URL |
+| `KAI_WORKBENCH_MODEL` | `qwen2.5-coder:7b` | Initial model for new sessions |
+| `KAI_WORKBENCH_TIMEOUT_MS` | `120000` | Chat request timeout; minimum 1000 ms |
+| `KAI_WORKBENCH_FIRST_BYTE_TIMEOUT_MS` | `90000` | Time allowed for a model stream to begin; minimum 1000 ms |
+| `KAI_WORKBENCH_MAX_TOKENS` | `4096` | Completion token limit; minimum 256 |
+| `KAI_WORKBENCH_HISTORY_MESSAGES` | `40` | Recent chat messages forwarded; minimum 4 |
 | `SAFE_ROOT` | `$HOME` | Root allowed by browser and agent file APIs |
-| `NODEGLM_MEMORY_FILE` | `$SAFE_ROOT/.nodeglm-memory.json` | Persisted explicit fact memory |
+| `KAI_WORKBENCH_MEMORY_FILE` | `$SAFE_ROOT/.kaiworkbench-memory.json` | Persisted explicit fact memory |
 | `PORT` | `3001` | HTTP port |
 | `HOST` | `127.0.0.1` | HTTP bind address |
-| `GLM_ALLOWED_ORIGINS` | local app URLs and `null` | Comma-separated CORS and WebSocket origins |
+| `KAI_WORKBENCH_ALLOWED_ORIGINS` | local app URLs and `null` | Comma-separated CORS and WebSocket origins |
 | `MODEL_CACHE_ROOT` | `~/.models` | Cache root created by `./s` |
 | `OLLAMA_MODELS` | `~/.models/ollama` | Ollama cache exported by `./s` |
 | `OLLAMA_CONTEXT_LENGTH` | `2048` | Context limit used by launcher-managed Ollama |
@@ -266,7 +266,7 @@ model on the inference server.
 
 ## API
 
-See [API.md](API.md) for the complete NodeGLM API reference, including HTTP
+See [API.md](API.md) for the complete KaiWorkbench API reference, including HTTP
 endpoints, Server-Sent Events, model-install NDJSON, the CppKAI WebSocket
 protocol, static routes, request/response shapes, status codes, limits, and the
 upstream OpenAI-compatible model API contract.
@@ -304,7 +304,7 @@ process isolation. In particular:
 - Browser editor saves are direct writes and do not use the agent diff approval
   flow.
 - Fact memory is persisted as plaintext JSON. Keep `SAFE_ROOT` or
-  `NODEGLM_MEMORY_FILE` on local storage you trust, and clear memory before
+  `KAI_WORKBENCH_MEMORY_FILE` on local storage you trust, and clear memory before
   sharing a workspace.
 - CORS is an origin check, not authentication.
 - The CppKAI WebSocket starts a local executable with the server user's
@@ -325,7 +325,7 @@ Edge and `msedgedriver` are available on `PATH`; set `EDGE_BIN` and
 
 ## Troubleshooting
 
-- **No models found:** verify that `GLM_BASE_URL/v1/models` returns an
+- **No models found:** verify that `KAI_WORKBENCH_BASE_URL/v1/models` returns an
   OpenAI-compatible model list.
 - **CUDA buffer allocation fails:** close other GPU-heavy applications, stop any
   already-running Ollama daemon, and restart with `./s` so the 2048-token
@@ -337,8 +337,8 @@ Edge and `msedgedriver` are available on `PATH`; set `EDGE_BIN` and
 - **Outside sandbox:** choose a path under `SAFE_ROOT`; symlink escapes are
   intentionally rejected.
 - **Wrong remembered fact:** click **Clear memory** in the chat footer, or edit
-  or remove `.nodeglm-memory.json` under `SAFE_ROOT` while the server is stopped.
+  or remove `.kaiworkbench-memory.json` under `SAFE_ROOT` while the server is stopped.
 - **CppKAI Console is not built:** initialize the submodules and build the
   executable configured by `KAI_CONSOLE`.
 - **Origin not allowed:** add the exact browser origin to
-  `GLM_ALLOWED_ORIGINS`.
+  `KAI_WORKBENCH_ALLOWED_ORIGINS`.

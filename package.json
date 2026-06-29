@@ -1,7 +1,7 @@
 {
-  "name": "glm-repl-server",
+  "name": "kai-workbench",
   "version": "1.0.0",
-  "description": "Local GLM coding agent with filesystem and shell tools",
+  "description": "Local KaiWorkbench coding agent with filesystem and shell tools",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

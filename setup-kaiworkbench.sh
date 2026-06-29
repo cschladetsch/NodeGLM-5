@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -e
 
-DIR="$HOME/local/repos/glm-repl"
+DIR="$HOME/local/repos/kai-workbench"
 mkdir -p "$DIR"
 cd "$DIR"
 
 # ── package.json ──────────────────────────────────────────────────────────────
 cat > package.json << 'PKGJSON'
 {
-  "name": "glm-repl-server",
+  "name": "kai-workbench",
   "version": "1.0.0",
   "main": "server.js",
   "scripts": {
@@ -36,7 +36,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: '8mb' }));
 
-const GLM_BASE_URL = process.env.GLM_BASE_URL || 'http://localhost:30000';
+const KAI_WORKBENCH_BASE_URL = process.env.KAI_WORKBENCH_BASE_URL || 'http://localhost:30000';
 const SAFE_ROOT    = process.env.SAFE_ROOT    || process.env.HOME || '/tmp';
 const PORT         = process.env.PORT         || 3001;
 
@@ -46,11 +46,11 @@ function safePath(rel) {
   return abs;
 }
 
-// GLM proxy — streams SSE
+// Model proxy — streams SSE
 app.post('/api/chat', async (req, res) => {
   const { messages, model, temperature, max_tokens, reasoning_effort } = req.body;
   const payload = JSON.stringify({
-    model:            model            || 'GLM-5.2',
+    model:            model            || 'qwen2.5-coder:7b',
     messages,
     temperature:      temperature      ?? 0.7,
     max_tokens:       max_tokens       ?? 4096,
@@ -58,7 +58,7 @@ app.post('/api/chat', async (req, res) => {
     reasoning_effort: reasoning_effort || undefined,
   });
 
-  const url = new URL('/v1/chat/completions', GLM_BASE_URL);
+  const url = new URL('/v1/chat/completions', KAI_WORKBENCH_BASE_URL);
   const lib = url.protocol === 'https:' ? require('https') : http;
 
   res.setHeader('Content-Type',  'text/event-stream');
@@ -146,10 +146,10 @@ wss.on('connection', (ws) => {
   ws.on('close', () => { if (proc) proc.kill(); });
 });
 
-app.get('/api/health', (_req, res) => res.json({ ok: true, glm: GLM_BASE_URL, root: SAFE_ROOT }));
+app.get('/api/health', (_req, res) => res.json({ ok: true, modelEndpoint: KAI_WORKBENCH_BASE_URL, root: SAFE_ROOT }));
 
 server.listen(PORT, () =>
-  console.log(`\n  GLM dev-server :${PORT}  →  GLM @ ${GLM_BASE_URL}  root=${SAFE_ROOT}\n`)
+  console.log(`\n  KaiWorkbench dev-server :${PORT}  →  model @ ${KAI_WORKBENCH_BASE_URL}  root=${SAFE_ROOT}\n`)
 );
 SERVERJS
 
@@ -160,7 +160,7 @@ cat > index.html << 'INDEXHTML'
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>GLM-5.2 · Dev Console</title>
+<title>KaiWorkbench · Dev Console</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.5/babel.min.js"></script>
@@ -455,7 +455,7 @@ function FileViewerPanel({ filePath }) {
 
 function ChatPanel({ injectedFile, onClearInject }) {
   const [messages, setMessages] = useState([
-    {role:'assistant',content:'GLM-5.2 ready. Ask anything or inject a local file to discuss it.'}
+    {role:'assistant',content:'KaiWorkbench ready. Ask anything or inject a local file to discuss it.'}
   ]);
   const [input, setInput] = useState('');
   const [streaming, setStreaming] = useState(false);
@@ -530,7 +530,7 @@ function ChatPanel({ injectedFile, onClearInject }) {
   return (
     <div className="main">
       <div style={{display:'flex',alignItems:'center',gap:8,padding:'8px 24px',borderBottom:'1px solid var(--border)',background:'var(--surface)',fontSize:12,color:'var(--muted)',flexShrink:0}}>
-        <span>GLM-5.2 · 1M context · MIT</span>
+        <span>KaiWorkbench · 1M context · MIT</span>
         <button className="btn btn-ghost" style={{marginLeft:'auto',fontSize:11,padding:'3px 8px'}}
           onClick={()=>setMessages([{role:'assistant',content:'Chat cleared.'}])}>Clear</button>
       </div>
@@ -571,7 +571,7 @@ function ChatPanel({ injectedFile, onClearInject }) {
         )}
         <div className="chat-input-row">
           <textarea ref={taRef} value={input} onChange={e=>setInput(e.target.value)}
-            onKeyDown={onKeyDown} placeholder="Message GLM-5.2… (Shift+Enter for newline)"
+            onKeyDown={onKeyDown} placeholder="Message KaiWorkbench… (Shift+Enter for newline)"
             disabled={streaming} rows={1}/>
           <button className="btn btn-primary" onClick={send}
             disabled={streaming||(!input.trim()&&attached.length===0)}>
@@ -611,7 +611,7 @@ function App() {
   return (
     <>
       <div className="header">
-        <span className="header-logo">GLM</span>
+        <span className="header-logo">KaiWorkbench</span>
         <span className="header-model">5.2 · local</span>
         <span className="header-dot" style={{background:dotColor,boxShadow:dotShadow,marginLeft:'auto'}}/>
         <span className="header-status">{status}</span>
@@ -645,13 +645,13 @@ echo "  Installing dependencies…"
 npm install --silent
 
 echo ""
-echo "  ✓ glm-repl installed at $DIR"
+echo "  ✓ kai-workbench installed at $DIR"
 echo ""
 echo "  Open $DIR/index.html in your browser, then:"
-echo "  GLM_BASE_URL=http://localhost:30000 node server.js"
+echo "  KAI_WORKBENCH_BASE_URL=http://localhost:30000 node server.js"
 echo ""
 
-# Start the server (override GLM endpoint via env)
-GLM_BASE_URL="${GLM_BASE_URL:-http://localhost:30000}" \
+# Start the server (override model endpoint via env)
+KAI_WORKBENCH_BASE_URL="${KAI_WORKBENCH_BASE_URL:-http://localhost:30000}" \
 SAFE_ROOT="${SAFE_ROOT:-$HOME}" \
 node server.js

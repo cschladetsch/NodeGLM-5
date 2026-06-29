@@ -26,7 +26,7 @@ const skip=!edge?'Microsoft Edge is not installed':!driver?'msedgedriver is not 
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 
 test('Edge edits and saves a C++ file through Ace', {skip}, async()=>{
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'glm-edge-e2e-'));
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'kai-workbench-edge-e2e-'));
   fs.writeFileSync(path.join(root,'sample.cpp'),'int main() { return 0; }\n');
   process.env.SAFE_ROOT=root;
   const {server}=require('../server');

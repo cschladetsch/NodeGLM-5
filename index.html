@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>GLM Code Console</title>
+<title>KaiWorkbench</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.24.5/babel.min.js"></script>
@@ -15,7 +15,7 @@
     --surface:   #13131a;
     --raised:    #1b1b26;
     --border:    #2a2a3d;
-    --accent:    #7c6af7;        /* periwinkle-violet: GLM's CHN-origin cool */
+    --accent:    #7c6af7;
     --accent2:   #34c8a0;        /* teal for REPL success */
     --warn:      #e07060;
     --text:      #ddddf4;
@@ -985,10 +985,10 @@ const API = window.location.protocol === 'file:'
   ? 'http://localhost:3001'
   : window.location.origin;
 ace.config.set('basePath','https://cdnjs.cloudflare.com/ajax/libs/ace/1.36.5/');
-const SID = sessionStorage.getItem('glm-code-sid') ||
+const SID = sessionStorage.getItem('kai-workbench-sid') ||
   (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
-sessionStorage.setItem('glm-code-sid', SID);
-const CHAT_MEMORY_KEY = 'nodeglm-chat-memory-v1';
+sessionStorage.setItem('kai-workbench-sid', SID);
+const CHAT_MEMORY_KEY = 'kai-workbench-chat-memory-v1';
 const CHAT_MEMORY_LIMIT = 100;
 const CHAT_IMAGE_MAX_BYTES = 4 * 1024 * 1024;
 const INITIAL_CHAT_MESSAGES = [{role:'assistant',content:'How can I help?'}];
@@ -1081,7 +1081,7 @@ function chatErrorMessage(error) {
   if(/unable to allocate CUDA|failed to load model/i.test(error.message))
     return 'The selected model could not allocate enough GPU memory. Close other GPU-heavy apps, restart Ollama through ./s so the low-memory settings apply, or choose a smaller model from the header; your conversation is saved.';
   if(/ECONNREFUSED.*127\.0\.0\.1:11434|fetch failed/i.test(error.message))
-    return 'Ollama is not accepting connections at 127.0.0.1:11434. Start Ollama, or restart NodeGLM through ./s so the local model service is available; your conversation is saved.';
+    return 'Ollama is not accepting connections at 127.0.0.1:11434. Start Ollama, or restart KaiWorkbench through ./s so the local model service is available; your conversation is saved.';
   return error.name==='AbortError'?'Generation stopped.':`Error: ${error.message}`;
 }
 
@@ -2002,7 +2002,7 @@ function getAceVimApi() {
 
 function installAceVimExCommands() {
   const Vim = getAceVimApi();
-  if (!Vim || Vim.__nodeglmExCommandsInstalled) return Vim;
+  if (!Vim || Vim.__kaiworkbenchExCommandsInstalled) return Vim;
 
   const define = (name, handler) => {
     if (typeof Vim.defineEx === 'function') {
@@ -2084,8 +2084,8 @@ function installAceVimExCommands() {
   };
 
   const run = (cm, action, input) => {
-    const editor = cm?._nodeglmEditor || cm?.editor || cm;
-    const ex = editor?._nodeglmExActions || {};
+    const editor = cm?._kaiworkbenchEditor || cm?.editor || cm;
+    const ex = editor?._kaiworkbenchExActions || {};
     const invoke = fn => (typeof fn === 'function' ? Promise.resolve(fn(editor, input)) : Promise.resolve());
     const close = () => invoke(ex.close);
     const save = () => invoke(ex.save);
@@ -2117,15 +2117,15 @@ function installAceVimExCommands() {
   define('s', (cm, input) => run(cm, 'substitute', input));
   define('substitute', (cm, input) => run(cm, 'substitute', input));
 
-  Vim.__nodeglmExCommandsInstalled = true;
+  Vim.__kaiworkbenchExCommandsInstalled = true;
   return Vim;
 }
 
 function bindAceVimExActions(editor, actions) {
   if (!editor) return;
   installAceVimExCommands();
-  editor._nodeglmEditor = editor;
-  editor._nodeglmExActions = actions || {};
+  editor._kaiworkbenchEditor = editor;
+  editor._kaiworkbenchExActions = actions || {};
 }
 
 // ── File editor panel ───────────────────────────────────────────────────────
@@ -3062,7 +3062,7 @@ function App() {
   const [rtab, setRtab]         = useState('bash');
   const [status, setStatus]     = useState('checking');
   const [injectedFile, setInj]  = useState(null);
-  const [rightWidth, setRightWidth] = useState(() => Number(localStorage.getItem('glm-right-width')) || 520);
+  const [rightWidth, setRightWidth] = useState(() => Number(localStorage.getItem('kai-workbench-right-width')) || 520);
   const [resizing, setResizing] = useState(false);
   const [rhoMirror, setRhoMirror] = useState('');
   const [rhoDraft, setRhoDraft] = useState('');
@@ -3167,14 +3167,14 @@ function App() {
       const result=await response.json();
       if(!response.ok||result.error)throw new Error(result.error||`HTTP ${response.status}`);
       setSelectedModel(result.model);
-      localStorage.setItem('glm-selected-model',result.model);
+      localStorage.setItem('kai-workbench-selected-model',result.model);
     }catch(error){setModelError(error.message);}
   };
 
   useEffect(() => {
     loadModels()
       .then(body=>{
-        const preferred=localStorage.getItem('glm-selected-model');
+        const preferred=localStorage.getItem('kai-workbench-selected-model');
         const next=preferred&&body.models.includes(preferred)?preferred:body.selected;
         setSelectedModel(next);
         if(next&&next!==body.selected)chooseModel(next,body.modelInfo||[]);
@@ -3239,7 +3239,7 @@ function App() {
   };
 
   useEffect(() => {
-    localStorage.setItem('glm-right-width', String(Math.round(rightWidth)));
+    localStorage.setItem('kai-workbench-right-width', String(Math.round(rightWidth)));
   }, [rightWidth]);
   const selectedModelInfo=modelInfo.find(model=>model.id===selectedModel)||
     (selectedModel?{id:selectedModel,label:selectedModel,installed:models.includes(selectedModel),vram:'Unknown',ram:'Unknown',fit:'Active model'}:null);
@@ -3248,7 +3248,7 @@ function App() {
     <>
       <ModelInstallModal state={installState} onClose={()=>setInstallState(null)} onStop={stopInstall}/>
       <div className="header">
-        <span className="header-logo">GLM</span>
+        <span className="header-logo">KaiWorkbench</span>
         <select className="model-select" value={selectedModel} onChange={event=>chooseModel(event.target.value)}
           disabled={modelInfo.length===0} title={modelError||modelTitle(selectedModelInfo)}>
           {models.length===0 && <option value="">No models found</option>}

@@ -151,7 +151,7 @@ test('header selects among models installed in the active endpoint',()=>{
   assert.match(html,/className="model-select"/);
   assert.match(html,/api\/models\?sid=/);
   assert.match(html,/api\/session\/model/);
-  assert.match(html,/glm-selected-model/);
+  assert.match(html,/kai-workbench-selected-model/);
   assert.match(html,/const \[modelInfo, setModelInfo\] = useState\(\[\]\)/);
   assert.match(html,/setModelInfo\(body\.modelInfo\|\|\[\]\)/);
   assert.match(html,/function modelTitle\(model\)/);
@@ -213,7 +213,7 @@ test('header displays app and overall VRAM usage',()=>{
   assert.doesNotMatch(server,/app\.get\('\/api\/vram'/);
   assert.match(server,/--query-gpu=uuid,index,name,memory\.used,memory\.total/);
   assert.match(server,/--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory/);
-  assert.match(server,/NodeGLM process tree plus local Ollama/);
+  assert.match(server,/KaiWorkbench process tree plus local Ollama/);
 });
 
 test('header displays system RAM usage',()=>{
@@ -281,7 +281,7 @@ test('main chat input regains focus after each request settles',()=>{
 });
 
 test('chat persists bounded conversation memory in local storage',()=>{
-  assert.match(html,/CHAT_MEMORY_KEY = 'nodeglm-chat-memory-v1'/);
+  assert.match(html,/CHAT_MEMORY_KEY = 'kai-workbench-chat-memory-v1'/);
   assert.match(html,/CHAT_MEMORY_LIMIT = 100/);
   assert.match(html,/useState\(loadChatMemory\)/);
   assert.match(html,/localStorage\.setItem\(CHAT_MEMORY_KEY,JSON\.stringify\(stable\)\)/);
@@ -309,7 +309,7 @@ test('CUDA allocation failures provide a usable low-memory recovery path',()=>{
   assert.match(html,/restart Ollama through \.\/s/);
   assert.match(html,/choose a smaller model from the header/);
   assert.match(html,/your conversation is saved/);
-  assert.match(launcher,/GLM_MODEL="\$\{GLM_MODEL:-qwen2\.5-coder:7b\}"/);
+  assert.match(launcher,/KAI_WORKBENCH_MODEL="\$\{KAI_WORKBENCH_MODEL:-qwen2\.5-coder:7b\}"/);
   assert.match(launcher,/OLLAMA_CONTEXT_LENGTH="\$\{OLLAMA_CONTEXT_LENGTH:-2048\}"/);
   assert.match(launcher,/OLLAMA_KV_CACHE_TYPE="\$\{OLLAMA_KV_CACHE_TYPE:-q8_0\}"/);
   assert.match(launcher,/OLLAMA_GPU_OVERHEAD="\$\{OLLAMA_GPU_OVERHEAD:-1073741824\}"/);
@@ -381,8 +381,8 @@ test('chat chooses tools according to whether a factual answer needs a lookup',(
   assert.match(server,/Do not reach for a tool merely because a factual question was asked/);
 });
 
-test('chat understands that NodeGLM modifies its own workspace',()=>{
-  assert.match(server,/NodeGLM is a self-hosted development environment/);
+test('chat understands that KaiWorkbench modifies its own workspace',()=>{
+  assert.match(server,/KaiWorkbench is a self-hosted development environment/);
   assert.match(server,/application running this conversation/);
   assert.match(server,/inspect, modify, and test that workspace/);
 });
@@ -407,10 +407,10 @@ test('chat supports cancellation and health checks inference readiness',()=>{
   assert.match(html,/Generation stopped/);
   assert.match(server,/new URL\('\/v1\/models',OLLAMA\)/);
   assert.match(server,/res\.on\('close'/);
-  assert.match(server,/GLM_TIMEOUT_MS/);
-  assert.match(server,/GLM_FIRST_BYTE_TIMEOUT_MS/);
-  assert.match(server,/GLM_MAX_TOKENS/);
-  assert.match(server,/GLM_HISTORY_MESSAGES/);
+  assert.match(server,/KAI_WORKBENCH_TIMEOUT_MS/);
+  assert.match(server,/KAI_WORKBENCH_FIRST_BYTE_TIMEOUT_MS/);
+  assert.match(server,/KAI_WORKBENCH_MAX_TOKENS/);
+  assert.match(server,/KAI_WORKBENCH_HISTORY_MESSAGES/);
   assert.match(server,/Model did not start streaming within/);
   assert.match(server,/may still be loading or may be too large/);
   assert.match(server,/closed without streaming a response/);
@@ -466,8 +466,8 @@ test('./s starts the server and schedules its self-hosted app window',()=>{
   assert.match(launcher,/Scripts\/open-app-window\.sh/);
   assert.match(windowLauncher,/api\/health/);
   assert.match(windowLauncher,/--app=\$URL/);
-  assert.match(windowLauncher,/NODEGLM_NO_WINDOW/);
-  assert.match(windowLauncher,/NODEGLM_BROWSER/);
+  assert.match(windowLauncher,/KAI_WORKBENCH_NO_WINDOW/);
+  assert.match(windowLauncher,/KAI_WORKBENCH_BROWSER/);
   assert.doesNotMatch(launcher,/cat >|TOOL:|new WebSocketServer|editor\.setTheme/);
 });
 
@@ -573,7 +573,7 @@ test('server.js integrates the filesystem and chat endpoints',()=>{
   assert.match(server,/app\.post\('\/api\/fs\/write'/);
   assert.match(server,/app\.get\('\/api\/health'/);
   assert.match(server,/HOST\s*=process\.env\.HOST\s*\|\|\s*'127\.0\.0\.1'/);
-  assert.match(server,/GLM_ALLOWED_ORIGINS/);
+  assert.match(server,/KAI_WORKBENCH_ALLOWED_ORIGINS/);
   assert.match(server,/new Map\(\)/);
   assert.match(server,/sessions\.size>=1000/);
   assert.match(server,/req\.headers\.origin&&!allowedOrigins\.has/);

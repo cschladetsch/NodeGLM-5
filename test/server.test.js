@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'glm-code-test-'));
+const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kai-workbench-test-'));
 process.env.SAFE_ROOT = root;
 const {app, safe, validSessionId, selectSessionModel, readUiConfig,
   parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,
@@ -36,7 +36,7 @@ test('safe rejects sibling-prefix and parent traversal paths', () => {
 });
 
 test('safe rejects symlinks that leave the sandbox', () => {
-  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'glm-code-outside-'));
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'kai-workbench-outside-'));
   fs.symlinkSync(outside, path.join(root, 'escape-link'));
   assert.throws(() => safe('escape-link/new.txt'), /Outside sandbox/);
   fs.rmSync(outside, {recursive:true, force:true});
@@ -119,8 +119,8 @@ test('memory extraction captures explicit user facts', () => {
 
 test('session memory deduplicates facts and builds a prompt block', () => {
   const session={memory:[]};
-  addMemoryFacts(session,['The user likes Vim','the user likes Vim','The user works in NodeGLM']);
-  assert.deepEqual(session.memory,['the user likes Vim','The user works in NodeGLM']);
+  addMemoryFacts(session,['The user likes Vim','the user likes Vim','The user works in KaiWorkbench']);
+  assert.deepEqual(session.memory,['the user likes Vim','The user works in KaiWorkbench']);
   assert.match(memoryPrompt(session),/Known user facts/);
   assert.match(memoryPrompt(session),/- the user likes Vim/);
 });
@@ -171,8 +171,8 @@ test('API rejects malformed session identifiers', async () => {
 });
 
 test('model selection is session-scoped and limited to installed models', async () => {
-  assert.equal(selectSessionModel('model-a','qwen:7b',['qwen:7b','glm:9b']),'qwen:7b');
-  assert.equal(selectSessionModel('model-b','glm:9b',['qwen:7b','glm:9b']),'glm:9b');
+  assert.equal(selectSessionModel('model-a','qwen:7b',['qwen:7b','llama:9b']),'qwen:7b');
+  assert.equal(selectSessionModel('model-b','llama:9b',['qwen:7b','llama:9b']),'llama:9b');
   assert.throws(()=>selectSessionModel('model-a','missing:1b',['qwen:7b']),/not installed/);
   assert.throws(()=>selectSessionModel('model-a',null,['qwen:7b']),/required/);
 });

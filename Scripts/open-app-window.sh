@@ -2,9 +2,9 @@
 set -u
 
 URL="${1:?usage: open-app-window.sh URL}"
-ATTEMPTS="${NODEGLM_WINDOW_WAIT_ATTEMPTS:-120}"
+ATTEMPTS="${KAI_WORKBENCH_WINDOW_WAIT_ATTEMPTS:-120}"
 
-if [[ "${NODEGLM_NO_WINDOW:-0}" == "1" ]]; then
+if [[ "${KAI_WORKBENCH_NO_WINDOW:-0}" == "1" ]]; then
   exit 0
 fi
 
@@ -16,12 +16,12 @@ for ((attempt=0; attempt<ATTEMPTS; attempt++)); do
 done
 
 if ! curl --silent --fail --max-time 1 "${URL%/}/api/health" >/dev/null 2>&1; then
-  echo "Warning: NodeGLM did not become ready at $URL; not opening a window." >&2
+  echo "Warning: KaiWorkbench did not become ready at $URL; not opening a window." >&2
   exit 0
 fi
 
-if [[ -n "${NODEGLM_BROWSER:-}" ]]; then
-  exec "$NODEGLM_BROWSER" "--app=$URL"
+if [[ -n "${KAI_WORKBENCH_BROWSER:-}" ]]; then
+  exec "$KAI_WORKBENCH_BROWSER" "--app=$URL"
 fi
 
 for browser in microsoft-edge microsoft-edge-stable google-chrome google-chrome-stable chromium chromium-browser; do

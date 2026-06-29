@@ -3,7 +3,7 @@
 API bridge details live in [API.md](API.md); keep this prompt focused on
 Debug-panel behavior rather than duplicating endpoint docs.
 
-Improve the NodeGLM Debug panel so it is a useful visual debugger for Pi code running in CppKAI.
+Improve the KaiWorkbench Debug panel so it is a useful visual debugger for Pi code running in CppKAI.
 
 The Debug tab must show at least three sub-panels at the same time. Do not hide them behind tabs.
 

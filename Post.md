@@ -1,8 +1,8 @@
-# LinkedIn Post Draft: NodeGLM-5
+# LinkedIn Post Draft: KaiWorkbench
 
 > Status: Early draft. Add a screenshot and repository link before publishing.
 
-I have been building NodeGLM-5: a local, browser-based coding workspace for
+I have been building KaiWorkbench: a local, browser-based coding workspace for
 OpenAI-compatible language models.
 
 The goal is straightforward: keep the model, code, shell, and approval flow in
@@ -48,7 +48,7 @@ build, and the Node test suite.
 
 ```mermaid
 flowchart LR
-    Browser["Browser UI"] --> Server["NodeGLM server"]
+    Browser["Browser UI"] --> Server["KaiWorkbench server"]
     Server --> Model["OpenAI-compatible model endpoint"]
     Server --> Files["SAFE_ROOT workspace"]
     Server --> Memory["Persisted fact memory"]
@@ -60,13 +60,13 @@ flowchart LR
 sequenceDiagram
     actor User
     participant UI as Browser
-    participant API as NodeGLM server
+    participant API as KaiWorkbench server
     participant LLM as Model
 
     User->>UI: My name is Christian
     UI->>API: Send chat request
     API->>API: Extract explicit fact
-    API->>API: Persist .nodeglm-memory.json
+    API->>API: Persist .kaiworkbench-memory.json
     API->>LLM: Prompt with known facts when relevant
     LLM-->>User: Response using remembered context
 ```

@@ -1,6 +1,6 @@
-# NodeGLM API
+# KaiWorkbench API
 
-This document is the canonical API reference for NodeGLM-5. It covers the
+This document is the canonical API reference for KaiWorkbench. It covers the
 Express HTTP API, streaming responses, the CppKAI WebSocket bridge, browser
 static routes, and the upstream OpenAI-compatible model API expected by the
 server.
@@ -23,7 +23,7 @@ The bind address and port are controlled by `HOST` and `PORT`.
   JSON body.
 - A valid `sid` is 1 to 128 characters and may contain letters, digits, `.`,
   `_`, and `-`.
-- CORS and WebSocket origin checks use `GLM_ALLOWED_ORIGINS`.
+- CORS and WebSocket origin checks use `KAI_WORKBENCH_ALLOWED_ORIGINS`.
 - Error responses are generally JSON:
 
 ```json
@@ -74,7 +74,7 @@ Rules:
 - The last message must have string `content`.
 - The server extracts explicit memory facts from the last message.
 - The server appends the authoritative session cwd marker to the last message.
-- Only the last `GLM_HISTORY_MESSAGES` messages are forwarded upstream.
+- Only the last `KAI_WORKBENCH_HISTORY_MESSAGES` messages are forwarded upstream.
 - The selected session model is used.
 
 Success response:
@@ -421,7 +421,7 @@ Rules:
 
 ### `GET /api/models`
 
-Lists installed upstream models and NodeGLM's recommended model metadata.
+Lists installed upstream models and KaiWorkbench's recommended model metadata.
 
 Query:
 
@@ -457,7 +457,7 @@ Status codes:
 
 ### `POST /api/models/install`
 
-Installs one of NodeGLM's recommended models through local Ollama. The response
+Installs one of KaiWorkbench's recommended models through local Ollama. The response
 is newline-delimited JSON.
 
 Request:
@@ -531,7 +531,7 @@ Response for a data URL:
 ```json
 {
   "ok": true,
-  "path": "/tmp/nodeglm-image-abc123/screenshot.png",
+  "path": "/tmp/kaiworkbench-image-abc123/screenshot.png",
   "mime": "image/png",
   "size": 12345,
   "opened": {"command":"xdg-open"}
@@ -600,7 +600,7 @@ Response:
   "vram": {
     "available": true,
     "source": "nvidia-smi",
-    "appScope": "NodeGLM process tree plus local Ollama",
+    "appScope": "KaiWorkbench process tree plus local Ollama",
     "gpus": [],
     "total": {"appUsedMiB": 0, "usedMiB": 0, "totalMiB": 0}
   },
@@ -620,7 +620,7 @@ When `nvidia-smi` is not available, `vram.available` is `false` and includes an
 ### `WS /api/kai?sid=...`
 
 Attaches the browser to its session-owned CppKAI runtime. The server validates
-the WebSocket origin against `GLM_ALLOWED_ORIGINS`.
+the WebSocket origin against `KAI_WORKBENCH_ALLOWED_ORIGINS`.
 
 Client messages are JSON text frames.
 
@@ -737,9 +737,9 @@ The server may send:
 
 ## Upstream Model API
 
-NodeGLM expects `GLM_BASE_URL` to expose an OpenAI-compatible API.
+KaiWorkbench expects `KAI_WORKBENCH_BASE_URL` to expose an OpenAI-compatible API.
 
-### `GET {GLM_BASE_URL}/v1/models`
+### `GET {KAI_WORKBENCH_BASE_URL}/v1/models`
 
 Expected response:
 
@@ -751,11 +751,11 @@ Expected response:
 }
 ```
 
-NodeGLM extracts and sorts the string `id` values.
+KaiWorkbench extracts and sorts the string `id` values.
 
-### `POST {GLM_BASE_URL}/v1/chat/completions`
+### `POST {KAI_WORKBENCH_BASE_URL}/v1/chat/completions`
 
-NodeGLM sends:
+KaiWorkbench sends:
 
 ```json
 {
@@ -770,7 +770,7 @@ NodeGLM sends:
 }
 ```
 
-Expected response is an OpenAI-compatible streaming SSE chat completion. NodeGLM
+Expected response is an OpenAI-compatible streaming SSE chat completion. KaiWorkbench
 forwards upstream chunks to the browser.
 
 ## Path Validation
