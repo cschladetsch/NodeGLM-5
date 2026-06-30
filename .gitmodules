@@ -4,6 +4,3 @@
 [submodule "Ext/CppKAI"]
 	path = Ext/CppKAI
 	url = https://github.com/cschladetsch/CppKAI
-[submodule "Ext/ENet"]
-	path = Ext/ENet
-	url = https://github.com/lsalzman/enet.git
