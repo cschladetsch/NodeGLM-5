@@ -160,6 +160,141 @@ Only explicit user-provided facts are stored. The memory file is ignored by Git
 to avoid accidentally committing personal data. Set `KAI_WORKBENCH_MEMORY_FILE` to
 move the persisted fact store elsewhere.
 
+## KAI Source RAG
+
+KaiWorkbench can ground C++ questions in an indexed local KAI corpus before the
+chat request is sent to the model. The chat footer has a `RAG` selector:
+
+- `auto`: retrieve only for likely C++/KAI questions.
+- `on`: always retrieve.
+- `off`: preserve the original non-RAG chat path.
+
+The v1 corpus is intentionally tight: `CppKaiCore` and `CppKaiLanguage` under
+the configured KAI checkout. By default that checkout is `Ext/CppKAI`; set
+`KAI_DIR` when the initialized KAI repository is elsewhere on disk:
+
+```bash
+git -C Ext/CppKAI submodule update --init Ext/CppKaiCore Ext/CppKaiLanguage
+ollama pull nomic-embed-text
+npm run rag:index
+```
+
+For an existing sibling checkout, use:
+
+```bash
+KAI_DIR=/home/christian/local/repos/CppKAI npm run rag:index
+```
+
+The indexer reads C/C++ source files, chunks declarations and definitions by
+syntax-ish boundaries instead of fixed line counts, and carries leading doc
+comments into the chunk. This keeps patterns such as:
+
+```cpp
+/// CRTP base used by tests.
+template <class Derived>
+class Base {
+public:
+  void call() { static_cast<Derived *>(this)->impl(); }
+};
+```
+
+as one retrievable unit rather than splitting the template line from the class
+body. Oversized declarations are split only after the normal declaration pass.
+
+Embeddings are generated locally through Ollama with
+`KAI_WORKBENCH_RAG_EMBED_MODEL` (default `nomic-embed-text`). Indexing is the
+only time the embedding model must process the whole corpus. At query time,
+KaiWorkbench embeds the user query first, then sends the grounded chat request;
+with the launcher default `OLLAMA_MAX_LOADED_MODELS=1`, Ollama can sequence the
+embedding model and the coding model instead of keeping both resident in 8 GB
+VRAM.
+
+The vector store is `.kaiworkbench-rag-index.json`: a flat JSON file containing
+file hashes, chunk metadata, and embedding vectors. A flat file is deliberate
+for a single-user desktop tool because it avoids native sqlite extension
+installation and any separate vector database service. Re-running
+`npm run rag:index` reuses unchanged files when the file hash and embedding
+model match, so a KAI `git pull` only re-embeds changed files.
+
+To add another corpus later, create a JSON config and point
+`KAI_WORKBENCH_RAG_CORPORA` at it:
+
+```json
+{
+  "corpora": [
+    {"id": "CppKaiCore", "path": "Ext/CppKAI/Ext/CppKaiCore"},
+    {"id": "CppKaiLanguage", "path": "Ext/CppKAI/Ext/CppKaiLanguage"},
+    {"id": "CppReferenceTemplates", "path": "Corpus/cppreference/templates"}
+  ]
+}
+```
+
+`GET /api/rag/status` reports both index metadata and `corpusStatus`. If
+`CppKaiCore` or `CppKaiLanguage` shows `files: 0`, initialize the nested KAI
+submodules before indexing:
+
+```bash
+git -C Ext/CppKAI submodule update --init Ext/CppKaiCore Ext/CppKaiLanguage
+npm run rag:index
+```
+
+### CRTP Regression Check
+
+After the KAI submodules are initialized and indexed, ask:
+
+```text
+Explain CRTP in this KAI codebase. Use the indexed source.
+```
+
+The expected retrieved material should include a real self-type template from
+the indexed KAI corpus, not an unrelated virtual-dispatch explanation. In this
+checkout, `Ext/CppKAI/Ext/CppKaiCore` and `Ext/CppKAI/Ext/CppKaiLanguage` are
+nested submodules; if `GET /api/rag/status` reports `files: 0` for them, run
+the submodule update command above before using this as a real-code regression.
+On this machine's populated sibling checkout, the relevant retrieval is:
+
+```cpp
+// Ext/CppKaiCore/Include/KAI/Core/BuiltinTypes/Container.h:9-32
+template <class T>
+struct Container : Reflected {
+    bool Attach(Object const &Q) {
+        if (!Self) {
+            KAI_THROW_0(NullObject);
+        }
+        // ...
+        Q.AddedToContainer(*Self);
+        return true;
+    }
+};
+
+// Ext/CppKaiCore/Include/KAI/Core/BuiltinTypes/Array.h:8-54
+class Array : public Container<Array> {
+   public:
+    typedef std::vector<Object> Objects;
+    typedef Objects::const_iterator const_iterator;
+    typedef Objects::iterator iterator;
+};
+```
+
+A passing grounded answer should look like:
+
+```text
+The retrieved KAI references show the CRTP/self-type shape in
+`Container.h:9-32` and `Array.h:8-54`: `Container` is a template
+(`template <class T> struct Container`) and the concrete type passes itself as
+the template argument (`class Array : public Container<Array>`).
+
+That is static polymorphism/self-type reuse: the derived type is named in the
+base-class template argument. These references do not show ordinary runtime
+virtual-function polymorphism for this pattern, so an answer should not pivot
+to vtables or virtual dispatch unless another retrieved chunk supports that.
+```
+
+The unit test `RAG indexing is incremental and keeps CRTP chunks retrievable`
+uses this same pattern as a local regression fixture. With the real KAI
+submodules populated, the retrieved paths should come from
+`Ext/CppKAI/Ext/CppKaiCore` or `Ext/CppKAI/Ext/CppKaiLanguage`.
+
 ## Agent Tool Flow
 
 The model can request `read_file`, `write_file`, or `bash`. Reads execute
@@ -241,6 +376,10 @@ before its spinner, progress bar, and elapsed timer appear.
 | `KAI_WORKBENCH_FIRST_BYTE_TIMEOUT_MS` | `90000` | Time allowed for a model stream to begin; minimum 1000 ms |
 | `KAI_WORKBENCH_MAX_TOKENS` | `4096` | Completion token limit; minimum 256 |
 | `KAI_WORKBENCH_HISTORY_MESSAGES` | `40` | Recent chat messages forwarded; minimum 4 |
+| `KAI_WORKBENCH_RAG_INDEX` | `.kaiworkbench-rag-index.json` under the KaiWorkbench repo | Local flat-file RAG vector index |
+| `KAI_WORKBENCH_RAG_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model used for indexing and query embeddings |
+| `KAI_WORKBENCH_RAG_TOP_K` | `3` | Retrieved chunks injected into grounded chat prompts; clamped to 1-8 |
+| `KAI_WORKBENCH_RAG_CORPORA` | unset | Optional JSON corpus config with a `corpora` array |
 | `SAFE_ROOT` | `$HOME` | Root allowed by browser and agent file APIs |
 | `KAI_WORKBENCH_MEMORY_FILE` | `$SAFE_ROOT/.kaiworkbench-memory.json` | Persisted explicit fact memory |
 | `PORT` | `3001` | HTTP port |
@@ -257,7 +396,7 @@ before its spinner, progress bar, and elapsed timer appear.
 | `MS_DIR` | `~/local/repos/CppLmmModelStore` | CppLmmModelStore checkout reported by the UI |
 | `DEEPSEEK_MODEL_HOME` | platform data directory | ModelStore directory listed by the UI |
 | `KAI_DIR` | `Ext/CppKAI` | CppKAI checkout |
-| `ENET_DIR` | `Ext/ENet` | ENet checkout linked into CppKAI when needed |
+| `ENET_DIR` | `Ext/CppKAI/Ext/ENet` | ENet checkout used by CppKAI |
 | `KAI_CONSOLE` | `Ext/CppKAI/Bin/Console` | CppKAI console executable |
 
 The model selector lists models returned by the active endpoint. Selecting a

@@ -1,6 +1,7 @@
 const express=require('express'),cors=require('cors'),fs=require('fs'),path=require('path'),os=require('os'),http=require('http'),https=require('https'),crypto=require('crypto');
 const {exec,spawn,execFile}=require('child_process');
 const Diff=require('diff');
+const RAG=require('./rag');
 
 const OLLAMA=process.env.KAI_WORKBENCH_BASE_URL||'http://localhost:11434';
 const ROOT  =fs.realpathSync(path.resolve(process.env.SAFE_ROOT||process.env.HOME||'/tmp'));
@@ -13,9 +14,12 @@ const KAI_WORKBENCH_TIMEOUT_MS=Math.max(1000,Number(process.env.KAI_WORKBENCH_TI
 const KAI_WORKBENCH_FIRST_BYTE_TIMEOUT_MS=Math.max(1000,Number(process.env.KAI_WORKBENCH_FIRST_BYTE_TIMEOUT_MS)||90000);
 const KAI_WORKBENCH_MAX_TOKENS=Math.max(256,Number(process.env.KAI_WORKBENCH_MAX_TOKENS)||4096);
 const KAI_WORKBENCH_HISTORY_MESSAGES=Math.max(4,Number(process.env.KAI_WORKBENCH_HISTORY_MESSAGES)||40);
+const KAI_WORKBENCH_RAG_INDEX=RAG.resolveIndexFile(__dirname);
+const KAI_WORKBENCH_RAG_EMBED_MODEL=process.env.KAI_WORKBENCH_RAG_EMBED_MODEL||RAG.DEFAULT_EMBED_MODEL;
+const KAI_WORKBENCH_RAG_TOP_K=Math.max(1,Math.min(8,Number(process.env.KAI_WORKBENCH_RAG_TOP_K)||RAG.DEFAULT_TOP_K));
 const MS_DIR=process.env.MS_DIR      ||path.join(os.homedir(),'local/repos/CppLmmModelStore');
 const KAI_DIR=process.env.KAI_DIR    ||path.join(__dirname,'Ext/CppKAI');
-const ENET_DIR=process.env.ENET_DIR  ||path.join(__dirname,'Ext/ENet');
+const ENET_DIR=process.env.ENET_DIR  ||path.join(KAI_DIR,'Ext/ENet');
 const KAI_CONSOLE=process.env.KAI_CONSOLE||path.join(KAI_DIR,'Bin/Console');
 const MEMORY_FILE=process.env.KAI_WORKBENCH_MEMORY_FILE||path.join(ROOT,'.kaiworkbench-memory.json');
 const OPEN_IMAGE_MAX_BYTES=8*1024*1024;
@@ -401,8 +405,25 @@ After each request, the user will provide a TOOL_RESULT. Continue until the task
 The [cwd: ...] marker on the latest message is the authoritative current directory shared with the Bash panel. Resolve every relative path from it. If the user enters a shell command such as cd, pwd, or ls, execute it with TOOL:bash; do not merely describe the command or ask what to do next.
 `;
 
-app.post('/api/chat',(req,res)=>{
-  const {messages,sid}=req.body;
+async function chatReferences(lastContent,mode){
+  const ragMode=['on','off','auto'].includes(mode)?mode:'auto';
+  if(ragMode==='off')return [];
+  if(ragMode==='auto'&&!RAG.isLikelyCppQuery(lastContent))return [];
+  if(!fs.existsSync(KAI_WORKBENCH_RAG_INDEX))return [];
+  try{
+    return await RAG.retrieve({
+      indexFile:KAI_WORKBENCH_RAG_INDEX,
+      baseUrl:OLLAMA,
+      topK:KAI_WORKBENCH_RAG_TOP_K,
+    },lastContent);
+  }catch(error){
+    console.error('RAG retrieval failed:',error.message);
+    return [];
+  }
+}
+
+app.post('/api/chat',async(req,res)=>{
+  const {messages,sid,rag}=req.body;
   if(!Array.isArray(messages)||messages.length===0)
     return res.status(400).json({error:'messages must be a non-empty array'});
   const s=sess(sid||'default');
@@ -416,6 +437,8 @@ app.post('/api/chat',(req,res)=>{
   const systemMessages=[{role:'system',content:SYSTEM}];
   const memory=memoryPrompt(s);
   if(memory)systemMessages.push({role:'system',content:memory});
+  const references=await chatReferences(last.content,rag);
+  if(references.length)systemMessages.push({role:'system',content:RAG.ragSystemPrompt(references)});
   const payload=JSON.stringify({
     model:s.model,
     messages:[...systemMessages,...augmented],
@@ -468,6 +491,38 @@ app.post('/api/chat',(req,res)=>{
   up.on('error',error=>fail(error.message));
   res.on('close',()=>{if(!res.writableEnded&&!ended){clearFirstByteTimer();up.destroy();}});
   up.write(payload);up.end();
+});
+
+app.get('/api/rag/status',(_req,res)=>{
+  const index=RAG.loadIndex(KAI_WORKBENCH_RAG_INDEX);
+  const configuredCorpora=RAG.loadCorpusConfig(__dirname,undefined,KAI_DIR);
+  const corpora=index.corpora?.length?index.corpora:configuredCorpora;
+  res.json({
+    indexFile:KAI_WORKBENCH_RAG_INDEX,
+    exists:fs.existsSync(KAI_WORKBENCH_RAG_INDEX),
+    embeddingModel:index.embeddingModel||KAI_WORKBENCH_RAG_EMBED_MODEL,
+    topK:KAI_WORKBENCH_RAG_TOP_K,
+    corpora,
+    corpusStatus:RAG.corpusStats(corpora),
+    files:Object.keys(index.files||{}).length,
+    chunks:index.chunks?.length||0,
+    updatedAt:index.updatedAt||null,
+  });
+});
+
+app.post('/api/rag/index',async(_req,res)=>{
+  try{
+    const result=await RAG.buildIndex({
+      root:__dirname,
+      indexFile:KAI_WORKBENCH_RAG_INDEX,
+      baseUrl:OLLAMA,
+      embeddingModel:KAI_WORKBENCH_RAG_EMBED_MODEL,
+      corpora:RAG.loadCorpusConfig(__dirname,undefined,KAI_DIR),
+    });
+    res.json({ok:true,...result});
+  }catch(error){
+    res.status(500).json({error:error.message});
+  }
 });
 
 // bash — handles cd, updates session cwd
@@ -829,7 +884,7 @@ function wsDecode(buffer){
 function ensureKaiENet(){
   const kaiEnet=path.join(KAI_DIR,'Ext/ENet');
   try{
-    if(!fs.existsSync(kaiEnet)){
+    if(!fs.existsSync(kaiEnet)&&path.resolve(ENET_DIR)!==path.resolve(kaiEnet)&&fs.existsSync(ENET_DIR)){
       fs.mkdirSync(path.dirname(kaiEnet),{recursive:true});
       fs.symlinkSync(ENET_DIR,kaiEnet,'dir');
     }
@@ -1022,4 +1077,4 @@ if(require.main===module){
 module.exports={app,server,safe,validSessionId,selectSessionModel,readUiConfig,
   parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,extractMemoryFacts,addMemoryFacts,memoryPrompt,
   modelInfo,RECOMMENDED_MODELS,isInstallableModel,cleanInstallOutput,installStatusText,
-  imageExtension,safeImageName,writeTempImage};
+  imageExtension,safeImageName,writeTempImage,chatReferences};

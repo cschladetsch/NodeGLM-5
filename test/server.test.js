@@ -10,6 +10,7 @@ const {app, safe, validSessionId, selectSessionModel, readUiConfig,
   parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,
   extractMemoryFacts,addMemoryFacts,memoryPrompt,modelInfo,RECOMMENDED_MODELS,isInstallableModel,cleanInstallOutput,installStatusText,
   imageExtension,safeImageName,writeTempImage} = require('../server');
+const RAG = require('../rag');
 
 test.after(() => {
   fs.rmSync(root, {recursive:true, force:true});
@@ -60,6 +61,107 @@ test('chat rejects malformed messages before proxying', async () => {
   const response = await invoke('post','/api/chat',{messages:[]});
   assert.equal(response.statusCode, 400);
   assert.match(response.body.error, /non-empty/);
+});
+
+test('RAG chunking keeps template declarations with leading comments', () => {
+  const source=[
+    '/// CRTP base used by tests.',
+    'template <class Derived>',
+    'class Base {',
+    'public:',
+    '  void call() { static_cast<Derived *>(this)->impl(); }',
+    '};',
+    '',
+    'class RuntimeBase {',
+    'public:',
+    '  virtual void call();',
+    '};',
+  ].join('\n');
+  const chunks=RAG.chunkCppSource(source,'example.hpp','test');
+  assert.ok(chunks.some(chunk=>
+    chunk.text.includes('/// CRTP base')&&
+    chunk.text.includes('template <class Derived>')&&
+    chunk.text.includes('static_cast<Derived *>')
+  ));
+});
+
+test('RAG status endpoint is available without an index', async () => {
+  const response=await invoke('get','/api/rag/status');
+  assert.equal(response.statusCode,200);
+  assert.equal(typeof response.body.indexFile,'string');
+  assert.equal(typeof response.body.chunks,'number');
+  assert.ok(Array.isArray(response.body.corpora));
+  assert.ok(Array.isArray(response.body.corpusStatus));
+  assert.equal(typeof response.body.corpusStatus[0]?.exists,'boolean');
+});
+
+test('RAG corpus defaults follow the configured KAI checkout', () => {
+  const kaiDir=path.join(root,'external-kai');
+  const corpora=RAG.loadCorpusConfig(__dirname,undefined,kaiDir);
+  assert.deepEqual(corpora,[
+    {id:'CppKaiCore',path:path.join(kaiDir,'Ext/CppKaiCore')},
+    {id:'CppKaiLanguage',path:path.join(kaiDir,'Ext/CppKaiLanguage')},
+  ]);
+});
+
+test('RAG default index path is repo-relative, not SAFE_ROOT-relative', () => {
+  assert.equal(RAG.resolveIndexFile(__dirname),path.join(__dirname,RAG.DEFAULT_INDEX_FILE));
+  assert.equal(RAG.resolveIndexFile(__dirname,'rag/index.json'),path.join(__dirname,'rag/index.json'));
+});
+
+test('RAG indexing is incremental and keeps CRTP chunks retrievable', async () => {
+  const project=fs.mkdtempSync(path.join(os.tmpdir(),'kai-rag-index-'));
+  const corpus=path.join(project,'Ext','CppKAI','Ext','CppKaiCore');
+  fs.mkdirSync(corpus,{recursive:true});
+  const source=[
+    '/// CRTP base used by the regression test.',
+    'template <class Derived>',
+    'class Base {',
+    'public:',
+    '  void call() { static_cast<Derived *>(this)->impl(); }',
+    '  void explain() { static_cast<Derived *>(this)->impl(); }',
+    '};',
+    '',
+    'class Widget : public Base<Widget> {',
+    'public:',
+    '  void impl();',
+    '};',
+  ].join('\n');
+  fs.writeFileSync(path.join(corpus,'Base.hpp'),source);
+  const indexFile=path.join(project,'.kaiworkbench-rag-index.json');
+  let embeds=0;
+  const fakeEmbed=async text=>{
+    embeds++;
+    return [
+      /crtp|Derived|static_cast|Base<Widget>/i.test(text)?1:0,
+      /virtual/i.test(text)?1:0,
+      String(text).length/1000,
+    ];
+  };
+  const options={
+    root:project,
+    indexFile,
+    embeddingModel:'test-embed',
+    corpora:[{id:'CppKaiCore',path:corpus}],
+    embedText:fakeEmbed,
+  };
+  const first=await RAG.buildIndex(options);
+  assert.equal(first.changedFiles,1);
+  assert.ok(first.embeddedChunks>=1);
+  const firstEmbeds=embeds;
+  const second=await RAG.buildIndex(options);
+  assert.equal(second.changedFiles,0);
+  assert.equal(second.skippedFiles,1);
+  assert.equal(embeds,firstEmbeds);
+
+  const refs=await RAG.retrieve({...options,topK:1},'Explain CRTP template Derived static_cast');
+  assert.equal(refs.length,1);
+  assert.match(refs[0].text,/template <class Derived>/);
+  assert.match(refs[0].text,/static_cast<Derived \*>/);
+  const prompt=RAG.ragSystemPrompt(refs);
+  assert.match(prompt,/Do not replace CRTP with runtime virtual-function polymorphism/);
+  assert.match(prompt,/Base\.hpp:\d+-\d+/);
+  fs.rmSync(project,{recursive:true,force:true});
 });
 
 test('UI config endpoint returns the validated request progress threshold', async () => {

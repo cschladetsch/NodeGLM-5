@@ -569,6 +569,8 @@ test('rho uses the Vim editor instead of a one-line prompt',()=>{
 
 test('server.js integrates the filesystem and chat endpoints',()=>{
   assert.match(server,/app\.post\('\/api\/chat'/);
+  assert.match(server,/app\.post\('\/api\/rag\/index'/);
+  assert.match(server,/app\.get\('\/api\/rag\/status'/);
   assert.match(server,/app\.get\('\/api\/modelstore'/);
   assert.match(server,/app\.post\('\/api\/fs\/write'/);
   assert.match(server,/app\.get\('\/api\/health'/);
@@ -577,6 +579,14 @@ test('server.js integrates the filesystem and chat endpoints',()=>{
   assert.match(server,/new Map\(\)/);
   assert.match(server,/sessions\.size>=1000/);
   assert.match(server,/req\.headers\.origin&&!allowedOrigins\.has/);
+});
+
+test('chat exposes a RAG grounding toggle',()=>{
+  assert.match(html,/kai-workbench-rag-mode/);
+  assert.match(html,/className="rag-select"/);
+  assert.match(html,/body:JSON\.stringify\(\{messages:history,sid:SID,rag:ragMode\}\)/);
+  assert.match(html,/<option value="auto">auto<\/option>/);
+  assert.match(html,/<option value="off">off<\/option>/);
 });
 
 test('server.js exposes the current REPL and filesystem endpoints',()=>{
@@ -598,7 +608,7 @@ test('server.js exposes the KAI websocket bridge',()=>{
 test('./s is no longer the implementation for CppKAI or the editor',()=>{
   assert.match(submodules,/path = Ext\/CppKAI/);
   assert.match(submodules,/url = https:\/\/github\.com\/cschladetsch\/CppKAI/);
-  assert.match(submodules,/path = Ext\/ENet/);
-  assert.match(submodules,/url = https:\/\/github\.com\/lsalzman\/enet\.git/);
+  assert.doesNotMatch(submodules,/path = Ext\/ENet/);
+  assert.match(server,/const ENET_DIR=process\.env\.ENET_DIR\s*\|\|\s*path\.join\(KAI_DIR,'Ext\/ENet'\)/);
   assert.match(launcher,/npm start &/);
 });

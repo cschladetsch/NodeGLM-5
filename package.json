@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "dev": "SAFE_ROOT=$HOME node server.js",
+    "rag:index": "node rag.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {

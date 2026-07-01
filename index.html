@@ -469,6 +469,15 @@
   }
   .chat-memory-link:hover:not(:disabled) { color: var(--accent); }
   .chat-memory-link:disabled { cursor: default; opacity: .45; }
+  .rag-select {
+    background: var(--raised);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font: 10px var(--mono);
+    padding: 2px 5px;
+    outline: none;
+  }
   .memory-editor-backdrop {
     position: fixed;
     inset: 0;
@@ -2499,6 +2508,7 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
   const [memoryEditorOpen, setMemoryEditorOpen] = useState(false);
   const [chatHistoryEditorOpen, setChatHistoryEditorOpen] = useState(false);
   const [chatHistoryIndex, setChatHistoryIndex] = useState(-1);
+  const [ragMode, setRagMode] = useState(localStorage.getItem('kai-workbench-rag-mode') || 'auto');
   const messagesEndRef = useRef(null);
   const taRef = useRef(null);
   const abortRef = useRef(null);
@@ -2575,7 +2585,7 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
     try{
       const res = await fetch(`${API}/api/chat`, {
         method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({messages:history,sid:SID}),
+        body:JSON.stringify({messages:history,sid:SID,rag:ragMode}),
         signal:controller.signal,
       });
       if(!res.ok)throw new Error((await res.json()).error||`HTTP ${res.status}`);
@@ -2966,6 +2976,17 @@ function ChatPanel({ injectedFile, onClearInject, onCwdChange }) {
           </button>
           <button className="chat-memory-clear" onClick={clearMemory}
             disabled={streaming||Boolean(pendingAction)}>Clear memory</button>
+          <span>RAG:</span>
+          <select className="rag-select" value={ragMode}
+            disabled={streaming||Boolean(pendingAction)}
+            onChange={event=>{
+              setRagMode(event.target.value);
+              localStorage.setItem('kai-workbench-rag-mode',event.target.value);
+            }}>
+            <option value="auto">auto</option>
+            <option value="on">on</option>
+            <option value="off">off</option>
+          </select>
         </div>
         {attachedFiles.length > 0 && (
           <div className="chat-input-files">

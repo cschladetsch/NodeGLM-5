@@ -2,3 +2,4 @@ node_modules/
 Logs/
 .nodeglm-memory.json
 .kaiworkbench-memory.json
+.kaiworkbench-rag-index.json

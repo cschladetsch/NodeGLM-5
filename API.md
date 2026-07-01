@@ -62,6 +62,7 @@ Request:
 ```json
 {
   "sid": "browser-session",
+  "rag": "auto",
   "messages": [
     {"role": "user", "content": "Explain this repository"}
   ]
@@ -73,6 +74,9 @@ Rules:
 - `messages` must be a non-empty array.
 - The last message must have string `content`.
 - The server extracts explicit memory facts from the last message.
+- `rag` may be `auto`, `on`, or `off`. `auto` retrieves KAI source chunks only
+  for likely C++/KAI questions. Missing indexes fall back to the original chat
+  path.
 - The server appends the authoritative session cwd marker to the last message.
 - Only the last `KAI_WORKBENCH_HISTORY_MESSAGES` messages are forwarded upstream.
 - The selected session model is used.
@@ -99,6 +103,52 @@ Status codes:
 |---|---|
 | `400` | Invalid request shape |
 | `200` | SSE stream started; upstream errors are sent as SSE error payloads |
+
+### `GET /api/rag/status`
+
+Returns local RAG index metadata. This endpoint does not build the index.
+
+Response:
+
+```json
+{
+  "indexFile": "/home/user/KaiWorkbench/.kaiworkbench-rag-index.json",
+  "exists": true,
+  "embeddingModel": "nomic-embed-text",
+  "topK": 3,
+  "corpora": [{"id":"CppKaiCore","path":"Ext/CppKAI/Ext/CppKaiCore"}],
+  "corpusStatus": [
+    {"id":"CppKaiCore","path":"Ext/CppKAI/Ext/CppKaiCore","exists":true,"files":120}
+  ],
+  "files": 42,
+  "chunks": 310,
+  "updatedAt": "2026-07-01T00:00:00.000Z"
+}
+```
+
+### `POST /api/rag/index`
+
+Builds or refreshes the local KAI source index. The server calls the configured
+local Ollama endpoint for embeddings and reuses unchanged files from the
+existing index.
+
+Response:
+
+```json
+{
+  "ok": true,
+  "indexFile": "/home/user/KaiWorkbench/.kaiworkbench-rag-index.json",
+  "embeddingModel": "nomic-embed-text",
+  "corpusResults": [
+    {"id":"CppKaiCore","path":"Ext/CppKAI/Ext/CppKaiCore","exists":true,"files":42,"changedFiles":2,"skippedFiles":40,"embeddedChunks":8}
+  ],
+  "scannedFiles": 42,
+  "changedFiles": 2,
+  "skippedFiles": 40,
+  "embeddedChunks": 8,
+  "totalChunks": 310
+}
+```
 
 ## Agent Tool Endpoints
 
