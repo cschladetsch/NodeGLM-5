@@ -5,7 +5,7 @@ const os=require('node:os');
 const path=require('node:path');
 const {spawnSync}=require('node:child_process');
 
-const opener=path.join(__dirname,'..','Scripts','open-app-window.sh');
+const opener=path.join(__dirname,'..','Scripts','open-app-window.ps1');
 
 function executable(file,content){
   fs.writeFileSync(file,content,{mode:0o755});

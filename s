@@ -82,7 +82,7 @@ wait_for_server() {
   return 1
 }
 if wait_for_server; then
-  "$SCRIPT_DIR/Scripts/open-app-window.sh" "$APP_URL"
+  "$SCRIPT_DIR/Scripts/open-app-window.ps1" "$APP_URL"
 else
   echo "Warning: server did not become ready at $APP_URL" >&2
 fi

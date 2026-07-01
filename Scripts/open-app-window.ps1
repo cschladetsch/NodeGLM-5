@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -u
 
-URL="${1:?usage: open-app-window.sh URL}"
+URL="${1:?usage: open-app-window.ps1 URL}"
 ATTEMPTS="${KAI_WORKBENCH_WINDOW_WAIT_ATTEMPTS:-120}"
 
 if [[ "${KAI_WORKBENCH_NO_WINDOW:-0}" == "1" ]]; then

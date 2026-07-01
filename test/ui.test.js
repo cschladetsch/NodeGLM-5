@@ -5,7 +5,7 @@ const path=require('node:path');
 
 const html=fs.readFileSync(path.join(__dirname,'..','index.html'),'utf8');
 const launcher=fs.readFileSync(path.join(__dirname,'..','s'),'utf8');
-const windowLauncher=fs.readFileSync(path.join(__dirname,'..','Scripts','open-app-window.sh'),'utf8');
+const windowLauncher=fs.readFileSync(path.join(__dirname,'..','Scripts','open-app-window.ps1'),'utf8');
 const server=fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8');
 const readme=fs.readFileSync(path.join(__dirname,'..','Readme.md'),'utf8');
 const uiConfig=JSON.parse(fs.readFileSync(path.join(__dirname,'..','ui-config.json'),'utf8'));
@@ -463,7 +463,7 @@ test('three-column workspace fills the React root without collapsing side panels
 test('./s starts the server and schedules its self-hosted app window',()=>{
   assert.match(launcher,/npm start &/);
   assert.match(launcher,/SAFE_ROOT="\$\{SAFE_ROOT:-\$SCRIPT_DIR\}"/);
-  assert.match(launcher,/Scripts\/open-app-window\.sh/);
+  assert.match(launcher,/Scripts\/open-app-window\.ps1/);
   assert.match(windowLauncher,/api\/health/);
   assert.match(windowLauncher,/--app=\$URL/);
   assert.match(windowLauncher,/KAI_WORKBENCH_NO_WINDOW/);
