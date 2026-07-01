@@ -1111,7 +1111,10 @@ function vramTitle(vram) {
   const gpu=(vram.gpus||[]).map(item =>
     `GPU ${item.index}: ${item.name} ${formatMiB(item.usedMiB)} / ${formatMiB(item.totalMiB)}`
   ).join('\n');
-  return `${vram.appScope}\nApp: ${formatMiB(total.appUsedMiB)}\nOverall: ${formatMiB(total.usedMiB)} / ${formatMiB(total.totalMiB)}${gpu?`\n${gpu}`:''}`;
+  const models=(vram.ollamaModels||[]).map(model =>
+    `${model.name}: ${formatMiB(model.sizeVramMiB)}`
+  ).join('\n');
+  return `${vram.appScope}\nApp: ${formatMiB(total.appUsedMiB)}\nOverall: ${formatMiB(total.usedMiB)} / ${formatMiB(total.totalMiB)}${gpu?`\n${gpu}`:''}${models?`\nLoaded models:\n${models}`:''}`;
 }
 
 function ramLabel(ram) {
@@ -1136,6 +1139,14 @@ function modelOptionLabel(model){
   const status=model.installed?'':'not installed';
   const memory=[model.vram,model.ram&&`RAM ${model.ram}`].filter(Boolean).join(', ');
   return [model.label||model.id,memory,status].filter(Boolean).join(' - ');
+}
+
+function modelVramLabel(model,vram){
+  if(!model)return 'VRAM ?';
+  if(model.vram&&model.vram!=='Unknown')return `${model.vram} VRAM`;
+  const loaded=(vram?.ollamaModels||[]).find(item=>item.name===model.id);
+  if(loaded)return `${formatMiB(loaded.sizeVramMiB)} VRAM`;
+  return 'Unknown VRAM';
 }
 
 function parseToolCall(text) {
@@ -3278,7 +3289,7 @@ function App() {
           </option>)}
         </select>
         <span className="header-status model-hint" title={modelError||modelTitle(selectedModelInfo)}>
-          {modelError||`${selectedModelInfo?.vram||'VRAM ?'} VRAM`}
+          {modelError||modelVramLabel(selectedModelInfo,vram)}
         </span>
         <span className="usage-badges">
           <span className="resource-badge vram-badge" title={vramTitle(vram)}><strong>{vramLabel(vram)}</strong></span>

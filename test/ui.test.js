@@ -184,6 +184,7 @@ test('header selects among models installed in the active endpoint',()=>{
   assert.doesNotMatch(html,/output:\(current\.output\+/);
   assert.doesNotMatch(html,/disabled=\{!model\.installed\}/);
   assert.match(html,/className="header-status model-hint"/);
+  assert.match(html,/function modelVramLabel\(model,vram\)/);
   assert.match(server,/app\.get\('\/api\/models'/);
   assert.match(server,/app\.post\('\/api\/models\/install'/);
   assert.match(server,/application\/x-ndjson/);
@@ -208,11 +209,14 @@ test('header displays app and overall VRAM usage',()=>{
   assert.match(html,/return `VRAM \$\{formatMiB\(total\.appUsedMiB\)\}`/);
   assert.match(html,/return `RAM \$\{formatMiB\(total\.appUsedMiB\)\}`/);
   assert.match(html,/Overall: \$\{formatMiB\(total\.usedMiB\)\} \/ \$\{formatMiB\(total\.totalMiB\)\}/);
+  assert.match(html,/Loaded models:/);
   assert.match(html,/formatMiB/);
   assert.match(server,/app\.get\('\/api\/resources'/);
   assert.doesNotMatch(server,/app\.get\('\/api\/vram'/);
   assert.match(server,/--query-gpu=uuid,index,name,memory\.used,memory\.total/);
   assert.match(server,/--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory/);
+  assert.match(server,/\/api\/ps/);
+  assert.match(server,/nvidia-smi\+ollama-api/);
   assert.match(server,/KaiWorkbench process tree plus local Ollama/);
 });
 

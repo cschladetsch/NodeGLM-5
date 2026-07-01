@@ -8,7 +8,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kai-workbench-test-'));
 process.env.SAFE_ROOT = root;
 const {app, safe, validSessionId, selectSessionModel, readUiConfig,
   parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,
-  extractMemoryFacts,addMemoryFacts,memoryPrompt,modelInfo,RECOMMENDED_MODELS,isInstallableModel,cleanInstallOutput,installStatusText,
+  ollamaPsModels,extractMemoryFacts,addMemoryFacts,memoryPrompt,modelInfo,RECOMMENDED_MODELS,isInstallableModel,cleanInstallOutput,installStatusText,
   imageExtension,safeImageName,writeTempImage} = require('../src/server');
 const RAG = require('../src/rag');
 
@@ -197,6 +197,16 @@ test('VRAM parser summarizes app and overall GPU memory', () => {
   assert.equal(summary.total.totalMiB,8192);
   assert.equal(summary.total.appUsedMiB,5120);
   assert.equal(summary.gpus[0].appUsedMiB,5120);
+});
+
+test('VRAM summary fills missing Ollama usage from loaded model status', () => {
+  const gpus=parseGpuRows('GPU-abc, 0, NVIDIA RTX 2070, 6144, 8192\n');
+  const processes=parseGpuProcessRows('GPU-abc, 222, /usr/bin/kwin, 256\n');
+  const models=ollamaPsModels({models:[{name:'custom-model:latest',size_vram:5*1024*1024*1024}]});
+  const summary=summarizeVram(gpus,processes,new Set([333]),true,models);
+  assert.equal(summary.source,'nvidia-smi+ollama-api');
+  assert.equal(summary.total.appUsedMiB,5120);
+  assert.deepEqual(summary.ollamaModels,models);
 });
 
 test('RAM summary reports system and app memory in MiB', () => {

@@ -84,11 +84,37 @@ function parseGpuProcessRows(text){
 function processBaseName(processName){
   return String(processName||'').split(/[\\/]/).pop();
 }
+function ollamaPsModels(body){
+  return (body?.models||[]).map(model=>({
+    name:model.name||model.model||'',
+    sizeVramMiB:bytesToMiB(model.size_vram),
+  })).filter(model=>model.sizeVramMiB>0);
+}
+function ollamaPsUsedMiB(models){
+  return (models||[]).reduce((total,model)=>total+(Number(model.sizeVramMiB)||0),0);
+}
 function isLocalModelEndpoint(){
   try{
     const host=new URL(OLLAMA).hostname;
     return ['localhost','127.0.0.1','::1'].includes(host);
   }catch{return false;}
+}
+function httpJson(pathname,timeout=2000){
+  return new Promise((resolve,reject)=>{
+    const url=new URL(pathname,OLLAMA);
+    const transport=url.protocol==='https:'?https:http;
+    const request=transport.get({hostname:url.hostname,port:url.port||(url.protocol==='https:'?443:80),path:url.pathname},response=>{
+      let body='';
+      response.on('data',chunk=>{if(body.length<1024*1024)body+=chunk;});
+      response.on('end',()=>{
+        if((response.statusCode||500)>=400)return reject(new Error(`Model endpoint HTTP ${response.statusCode}`));
+        try{resolve(JSON.parse(body||'{}'));}
+        catch(error){reject(new Error(`Invalid model endpoint JSON: ${error.message}`));}
+      });
+    });
+    request.setTimeout(timeout,()=>request.destroy(new Error('Model endpoint request timed out')));
+    request.on('error',reject);
+  });
 }
 function execFileText(command,args,timeout=2000){
   return new Promise((resolve,reject)=>{
@@ -113,20 +139,26 @@ async function appGpuPids(){
     return related;
   }catch{return new Set([process.pid]);}
 }
-function summarizeVram(gpus,processes,relatedPids,includeLocalOllama){
+function summarizeVram(gpus,processes,relatedPids,includeLocalOllama,ollamaModels=[]){
   const gpuByUuid=new Map(gpus.map(gpu=>[gpu.uuid,{...gpu,appUsedMiB:0}]));
+  let ollamaProcessUsedMiB=0;
   for(const proc of processes){
     const gpu=gpuByUuid.get(proc.gpuUuid);
     if(!gpu)continue;
     const name=processBaseName(proc.processName);
     const belongsToApp=relatedPids.has(proc.pid)||(includeLocalOllama&&name==='ollama');
     if(belongsToApp)gpu.appUsedMiB+=proc.usedMiB;
+    if(includeLocalOllama&&name==='ollama')ollamaProcessUsedMiB+=proc.usedMiB;
   }
   const rows=[...gpuByUuid.values()];
+  const ollamaApiUsedMiB=includeLocalOllama?ollamaPsUsedMiB(ollamaModels):0;
+  const ollamaApiMissingMiB=Math.max(0,ollamaApiUsedMiB-ollamaProcessUsedMiB);
+  if(ollamaApiMissingMiB&&rows.length)rows[0].appUsedMiB+=ollamaApiMissingMiB;
   return {
     available:true,
-    source:'nvidia-smi',
+    source:ollamaApiUsedMiB?'nvidia-smi+ollama-api':'nvidia-smi',
     appScope:includeLocalOllama?'KaiWorkbench process tree plus local Ollama':'KaiWorkbench process tree',
+    ollamaModels,
     gpus:rows,
     total:rows.reduce((total,gpu)=>({
       appUsedMiB:total.appUsedMiB+gpu.appUsedMiB,
@@ -155,13 +187,27 @@ function queryRam(){
 async function queryVram(){
   const gpuArgs=['--query-gpu=uuid,index,name,memory.used,memory.total','--format=csv,noheader,nounits'];
   const appArgs=['--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory','--format=csv,noheader,nounits'];
+  const includeLocalOllama=isLocalModelEndpoint();
+  const ollamaModelsPromise=includeLocalOllama?httpJson('/api/ps').then(ollamaPsModels).catch(()=>[]):Promise.resolve([]);
   try{
-    const [gpuText,appText,relatedPids]=await Promise.all([
+    const [gpuText,appText,relatedPids,ollamaModels]=await Promise.all([
       execFileText('nvidia-smi',gpuArgs),
-      execFileText('nvidia-smi',appArgs).catch(()=>''), appGpuPids()
+      execFileText('nvidia-smi',appArgs).catch(()=>''), appGpuPids(), ollamaModelsPromise
     ]);
-    return summarizeVram(parseGpuRows(gpuText),parseGpuProcessRows(appText),relatedPids,isLocalModelEndpoint());
+    return summarizeVram(parseGpuRows(gpuText),parseGpuProcessRows(appText),relatedPids,includeLocalOllama,ollamaModels);
   }catch(error){
+    const ollamaModels=await ollamaModelsPromise;
+    const appUsedMiB=ollamaPsUsedMiB(ollamaModels);
+    if(includeLocalOllama&&appUsedMiB){
+      return {
+        available:true,
+        source:'ollama-api',
+        appScope:'Local Ollama loaded models',
+        ollamaModels,
+        gpus:[],
+        total:{appUsedMiB,usedMiB:appUsedMiB,totalMiB:0},
+      };
+    }
     return {available:false,source:'nvidia-smi',error:error.code==='ENOENT'?'nvidia-smi not found':error.message};
   }
 }
@@ -1076,6 +1122,6 @@ if(require.main===module){
 }
 
 module.exports={app,server,safe,validSessionId,selectSessionModel,readUiConfig,
-  parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,extractMemoryFacts,addMemoryFacts,memoryPrompt,
+  parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,ollamaPsModels,extractMemoryFacts,addMemoryFacts,memoryPrompt,
   modelInfo,RECOMMENDED_MODELS,isInstallableModel,cleanInstallOutput,installStatusText,
   imageExtension,safeImageName,writeTempImage,chatReferences};
