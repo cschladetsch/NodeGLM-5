@@ -3,6 +3,7 @@ const {exec,spawn,execFile}=require('child_process');
 const Diff=require('diff');
 const RAG=require('./rag');
 
+const APP_ROOT=path.resolve(__dirname,'..');
 const OLLAMA=process.env.KAI_WORKBENCH_BASE_URL||'http://localhost:11434';
 const ROOT  =fs.realpathSync(path.resolve(process.env.SAFE_ROOT||process.env.HOME||'/tmp'));
 const PORT  =process.env.PORT        ||3001;
@@ -14,11 +15,11 @@ const KAI_WORKBENCH_TIMEOUT_MS=Math.max(1000,Number(process.env.KAI_WORKBENCH_TI
 const KAI_WORKBENCH_FIRST_BYTE_TIMEOUT_MS=Math.max(1000,Number(process.env.KAI_WORKBENCH_FIRST_BYTE_TIMEOUT_MS)||90000);
 const KAI_WORKBENCH_MAX_TOKENS=Math.max(256,Number(process.env.KAI_WORKBENCH_MAX_TOKENS)||4096);
 const KAI_WORKBENCH_HISTORY_MESSAGES=Math.max(4,Number(process.env.KAI_WORKBENCH_HISTORY_MESSAGES)||40);
-const KAI_WORKBENCH_RAG_INDEX=RAG.resolveIndexFile(__dirname);
+const KAI_WORKBENCH_RAG_INDEX=RAG.resolveIndexFile(APP_ROOT);
 const KAI_WORKBENCH_RAG_EMBED_MODEL=process.env.KAI_WORKBENCH_RAG_EMBED_MODEL||RAG.DEFAULT_EMBED_MODEL;
 const KAI_WORKBENCH_RAG_TOP_K=Math.max(1,Math.min(8,Number(process.env.KAI_WORKBENCH_RAG_TOP_K)||RAG.DEFAULT_TOP_K));
 const MS_DIR=process.env.MS_DIR      ||path.join(os.homedir(),'local/repos/CppLmmModelStore');
-const KAI_DIR=process.env.KAI_DIR    ||path.join(__dirname,'Ext/CppKAI');
+const KAI_DIR=process.env.KAI_DIR    ||path.join(APP_ROOT,'Ext/CppKAI');
 const ENET_DIR=process.env.ENET_DIR  ||path.join(KAI_DIR,'Ext/ENet');
 const KAI_CONSOLE=process.env.KAI_CONSOLE||path.join(KAI_DIR,'Bin/Console');
 const MEMORY_FILE=process.env.KAI_WORKBENCH_MEMORY_FILE||path.join(ROOT,'.kaiworkbench-memory.json');
@@ -33,7 +34,7 @@ const RECOMMENDED_MODELS=[
   {id:'gemma3:4b',label:'Gemma 3 4B',vram:'~4-6 GB',ram:'~8 GB',fit:'Compact general chat'}
 ];
 
-function readUiConfig(configPath=path.join(__dirname,'ui-config.json')){
+function readUiConfig(configPath=path.join(APP_ROOT,'ui-config.json')){
   const config=JSON.parse(fs.readFileSync(configPath,'utf8'));
   if(typeof config.requestProgressDelaySeconds!=='number'||
       !Number.isFinite(config.requestProgressDelaySeconds)||config.requestProgressDelaySeconds<0)
@@ -58,7 +59,7 @@ app.use('/api',(req,res,next)=>{
   next();
 });
 
-app.get(['/', '/index.html'],(_req,res)=>res.sendFile(path.join(__dirname,'index.html')));
+app.get(['/', '/index.html'],(_req,res)=>res.sendFile(path.join(APP_ROOT,'public','index.html')));
 app.get('/ui-config.json',(_req,res)=>res.json(UI_CONFIG));
 
 function csvColumns(line){
@@ -495,7 +496,7 @@ app.post('/api/chat',async(req,res)=>{
 
 app.get('/api/rag/status',(_req,res)=>{
   const index=RAG.loadIndex(KAI_WORKBENCH_RAG_INDEX);
-  const configuredCorpora=RAG.loadCorpusConfig(__dirname,undefined,KAI_DIR);
+  const configuredCorpora=RAG.loadCorpusConfig(APP_ROOT,undefined,KAI_DIR);
   const corpora=index.corpora?.length?index.corpora:configuredCorpora;
   res.json({
     indexFile:KAI_WORKBENCH_RAG_INDEX,
@@ -513,11 +514,11 @@ app.get('/api/rag/status',(_req,res)=>{
 app.post('/api/rag/index',async(_req,res)=>{
   try{
     const result=await RAG.buildIndex({
-      root:__dirname,
+      root:APP_ROOT,
       indexFile:KAI_WORKBENCH_RAG_INDEX,
       baseUrl:OLLAMA,
       embeddingModel:KAI_WORKBENCH_RAG_EMBED_MODEL,
-      corpora:RAG.loadCorpusConfig(__dirname,undefined,KAI_DIR),
+      corpora:RAG.loadCorpusConfig(APP_ROOT,undefined,KAI_DIR),
     });
     res.json({ok:true,...result});
   }catch(error){

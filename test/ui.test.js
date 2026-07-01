@@ -3,10 +3,10 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 
-const html=fs.readFileSync(path.join(__dirname,'..','index.html'),'utf8');
-const launcher=fs.readFileSync(path.join(__dirname,'..','s'),'utf8');
+const html=fs.readFileSync(path.join(__dirname,'..','public','index.html'),'utf8');
+const launcher=fs.readFileSync(path.join(__dirname,'..','s.ps1'),'utf8');
 const windowLauncher=fs.readFileSync(path.join(__dirname,'..','Scripts','open-app-window.ps1'),'utf8');
-const server=fs.readFileSync(path.join(__dirname,'..','server.js'),'utf8');
+const server=fs.readFileSync(path.join(__dirname,'..','src','server.js'),'utf8');
 const readme=fs.readFileSync(path.join(__dirname,'..','Readme.md'),'utf8');
 const uiConfig=JSON.parse(fs.readFileSync(path.join(__dirname,'..','ui-config.json'),'utf8'));
 const readOptional=file=>fs.existsSync(file)?fs.readFileSync(file,'utf8'):'';
@@ -306,7 +306,7 @@ test('chat errors replace the active placeholder instead of adding a blank messa
 
 test('CUDA allocation failures provide a usable low-memory recovery path',()=>{
   assert.match(html,/unable to allocate CUDA\|failed to load model/);
-  assert.match(html,/restart Ollama through \.\/s/);
+  assert.match(html,/restart Ollama through \.\/s\.ps1/);
   assert.match(html,/choose a smaller model from the header/);
   assert.match(html,/your conversation is saved/);
   assert.match(launcher,/KAI_WORKBENCH_MODEL="\$\{KAI_WORKBENCH_MODEL:-qwen2\.5-coder:7b\}"/);
@@ -460,7 +460,7 @@ test('three-column workspace fills the React root without collapsing side panels
   assert.match(html,/\.right\s*\{[^}]*flex-shrink:\s*0[^}]*min-width:\s*320px/s);
 });
 
-test('./s starts the server and schedules its self-hosted app window',()=>{
+test('./s.ps1 starts the server and schedules its self-hosted app window',()=>{
   assert.match(launcher,/npm start &/);
   assert.match(launcher,/SAFE_ROOT="\$\{SAFE_ROOT:-\$SCRIPT_DIR\}"/);
   assert.match(launcher,/Scripts\/open-app-window\.ps1/);
@@ -605,7 +605,7 @@ test('server.js exposes the KAI websocket bridge',()=>{
   assert.match(server,/socket\.on\('close',\(\)=>runtime\.detach\(socket\)\)/);
 });
 
-test('./s is no longer the implementation for CppKAI or the editor',()=>{
+test('./s.ps1 is no longer the implementation for CppKAI or the editor',()=>{
   assert.match(submodules,/path = Ext\/CppKAI/);
   assert.match(submodules,/url = https:\/\/github\.com\/cschladetsch\/CppKAI/);
   assert.doesNotMatch(submodules,/path = Ext\/ENet/);

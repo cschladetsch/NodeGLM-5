@@ -312,7 +312,7 @@ module.exports={
 };
 
 if(require.main===module){
-  const root=path.resolve(__dirname);
+  const root=path.resolve(__dirname,'..');
   const baseUrl=process.env.KAI_WORKBENCH_BASE_URL||'http://localhost:11434';
   const indexFile=resolveIndexFile(root);
   buildIndex({

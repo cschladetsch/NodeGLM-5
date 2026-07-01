@@ -1088,9 +1088,9 @@ function saveChatMemory(messages) {
 
 function chatErrorMessage(error) {
   if(/unable to allocate CUDA|failed to load model/i.test(error.message))
-    return 'The selected model could not allocate enough GPU memory. Close other GPU-heavy apps, restart Ollama through ./s so the low-memory settings apply, or choose a smaller model from the header; your conversation is saved.';
+    return 'The selected model could not allocate enough GPU memory. Close other GPU-heavy apps, restart Ollama through ./s.ps1 so the low-memory settings apply, or choose a smaller model from the header; your conversation is saved.';
   if(/ECONNREFUSED.*127\.0\.0\.1:11434|fetch failed/i.test(error.message))
-    return 'Ollama is not accepting connections at 127.0.0.1:11434. Start Ollama, or restart KaiWorkbench through ./s so the local model service is available; your conversation is saved.';
+    return 'Ollama is not accepting connections at 127.0.0.1:11434. Start Ollama, or restart KaiWorkbench through ./s.ps1 so the local model service is available; your conversation is saved.';
   return error.name==='AbortError'?'Generation stopped.':`Error: ${error.message}`;
 }
 

@@ -20,7 +20,7 @@ The current workspace includes:
 - explicit fact memory for details like the user's name, preferences, and other
   user-provided facts;
 - an editable stored-facts view from the chat footer;
-- a repo-level `run_tests.ps1` that installs dependencies when needed, builds
+- a repo-level `Scripts/run_tests.ps1` that installs dependencies when needed, builds
   when a build script exists, and runs the full test suite;
 - per-session model selection; and
 - a persistent CppKAI runtime with Pi and Rho consoles plus executor-attached
@@ -40,9 +40,9 @@ matter.
 I have also brought the project documentation up to date with Mermaid diagrams
 covering the architecture, fact memory, agent approval sequence, and
 path-validation flow. The complete local server API is documented in
-`API.md`, so the post and README do not need to duplicate endpoint details.
+`../API.md`, so the post and README do not need to duplicate endpoint details.
 
-The current test path is intentionally boring: `./run_tests.ps1` is the single
+The current test path is intentionally boring: `./Scripts/run_tests.ps1` is the single
 entry point for local verification, including dependency refresh, optional
 build, and the Node test suite.
 

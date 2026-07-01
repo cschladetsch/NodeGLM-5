@@ -26,12 +26,12 @@ flowchart LR
     Server <-->|pseudo-terminal| Kai
 ```
 
-The browser has no direct filesystem access. `server.js` validates file paths,
+The browser has no direct filesystem access. `src/server.js` validates file paths,
 tracks each browser session's working directory and selected model, extracts
 explicit user facts into persisted memory, proxies model traffic, and starts
-local subprocesses. `index.html` contains the client UI. The complete HTTP,
+local subprocesses. `public/index.html` contains the client UI. The complete HTTP,
 SSE, NDJSON, WebSocket, static route, and upstream model API reference is
-maintained in [API.md](API.md).
+maintained in [docs/API.md](docs/API.md).
 
 ## Requirements
 
@@ -46,7 +46,7 @@ maintained in [API.md](API.md).
 The default endpoint is Ollama at `http://localhost:11434`, using the
 `qwen2.5-coder:7b` coding model. The launcher uses a 2048-token context and
 memory-conservative Ollama defaults so it can run on an 8 GB GPU with CPU
-offload when needed. If Ollama is already running before `./s` starts, restart
+offload when needed. If Ollama is already running before `./s.ps1` starts, restart
 Ollama so those memory settings take effect.
 
 ## Install
@@ -67,18 +67,18 @@ git submodule update --init --recursive
 
 The launcher creates the configured model-cache directories, starts a local
 Ollama server when necessary, checks that the selected Ollama model is installed,
-stops an existing `node server.js` process, and then runs the application. It
+stops an existing `node src/server.js` process, and then runs the application. It
 opens the UI in a standalone browser window when the server becomes ready and
 uses this repository as the default workspace, allowing KaiWorkbench to inspect and
 modify its own implementation:
 
 ```bash
-./s
+./s.ps1
 ```
 
 Set `KAI_WORKBENCH_NO_WINDOW=1` to disable automatic window creation, or set
 `KAI_WORKBENCH_BROWSER` to a browser executable that supports `--app`. The page may
-also be opened directly from `index.html`; the server must still be running and
+also be opened directly from `public/index.html`; the server must still be running and
 the default CORS policy must allow the resulting `null` origin.
 
 To run without the launcher:
@@ -385,14 +385,14 @@ before its spinner, progress bar, and elapsed timer appear.
 | `PORT` | `3001` | HTTP port |
 | `HOST` | `127.0.0.1` | HTTP bind address |
 | `KAI_WORKBENCH_ALLOWED_ORIGINS` | local app URLs and `null` | Comma-separated CORS and WebSocket origins |
-| `MODEL_CACHE_ROOT` | `~/.models` | Cache root created by `./s` |
-| `OLLAMA_MODELS` | `~/.models/ollama` | Ollama cache exported by `./s` |
+| `MODEL_CACHE_ROOT` | `~/.models` | Cache root created by `./s.ps1` |
+| `OLLAMA_MODELS` | `~/.models/ollama` | Ollama cache exported by `./s.ps1` |
 | `OLLAMA_CONTEXT_LENGTH` | `2048` | Context limit used by launcher-managed Ollama |
 | `OLLAMA_KV_CACHE_TYPE` | `q8_0` | Lower-memory KV cache used by launcher-managed Ollama |
 | `OLLAMA_GPU_OVERHEAD` | `1073741824` | VRAM reserved so Ollama can offload layers instead of overcommitting |
 | `OLLAMA_MAX_LOADED_MODELS` | `1` | Prevent multiple models competing for VRAM |
 | `OLLAMA_NUM_PARALLEL` | `1` | Prevent concurrent requests duplicating context memory |
-| `HF_HOME` | `~/.models/hf` | Hugging Face cache exported by `./s` |
+| `HF_HOME` | `~/.models/hf` | Hugging Face cache exported by `./s.ps1` |
 | `MS_DIR` | `~/local/repos/CppLmmModelStore` | CppLmmModelStore checkout reported by the UI |
 | `DEEPSEEK_MODEL_HOME` | platform data directory | ModelStore directory listed by the UI |
 | `KAI_DIR` | `Ext/CppKAI` | CppKAI checkout |
@@ -405,7 +405,7 @@ model on the inference server.
 
 ## API
 
-See [API.md](API.md) for the complete KaiWorkbench API reference, including HTTP
+See [docs/API.md](docs/API.md) for the complete KaiWorkbench API reference, including HTTP
 endpoints, Server-Sent Events, model-install NDJSON, the CppKAI WebSocket
 protocol, static routes, request/response shapes, status codes, limits, and the
 upstream OpenAI-compatible model API contract.
@@ -467,11 +467,11 @@ Edge and `msedgedriver` are available on `PATH`; set `EDGE_BIN` and
 - **No models found:** verify that `KAI_WORKBENCH_BASE_URL/v1/models` returns an
   OpenAI-compatible model list.
 - **CUDA buffer allocation fails:** close other GPU-heavy applications, stop any
-  already-running Ollama daemon, and restart with `./s` so the 2048-token
+  already-running Ollama daemon, and restart with `./s.ps1` so the 2048-token
   context, quantized KV cache, single-model loading, and CPU offload settings
   apply. If `qwen2.5-coder:7b` still cannot allocate on an 8 GB card, choose a
   smaller installed model from the header.
-- **Ollama model is not installed:** run `ollama pull <model>` before `./s`.
+- **Ollama model is not installed:** run `ollama pull <model>` before `./s.ps1`.
 - **Port already in use:** stop the existing server or set another `PORT`.
 - **Outside sandbox:** choose a path under `SAFE_ROOT`; symlink escapes are
   intentionally rejected.

@@ -1,6 +1,6 @@
 # Debug Panel Prompt
 
-API bridge details live in [API.md](API.md); keep this prompt focused on
+API bridge details live in [../API.md](../API.md); keep this prompt focused on
 Debug-panel behavior rather than duplicating endpoint docs.
 
 Improve the KaiWorkbench Debug panel so it is a useful visual debugger for Pi code running in CppKAI.
@@ -30,7 +30,7 @@ The Debug tab must show at least three sub-panels at the same time. Do not hide 
 
 Implementation constraints:
 
-- Keep the existing WebSocket `/api/kai` bridge documented in [API.md](API.md) unless a backend change is necessary.
+- Keep the existing WebSocket `/api/kai` bridge documented in [../API.md](../API.md) unless a backend change is necessary.
 - Reuse the current `inspect_tree` and `debug_action` request flow where possible.
 - If CppKAI does not currently expose enough context stack details, extend the backend/control response shape deliberately and add tests around the new fields.
 - The Debug panel must update after every debug action that can change Executor state.

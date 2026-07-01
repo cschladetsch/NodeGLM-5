@@ -9,8 +9,8 @@ process.env.SAFE_ROOT = root;
 const {app, safe, validSessionId, selectSessionModel, readUiConfig,
   parseGpuRows,parseGpuProcessRows,summarizeVram,queryRam,
   extractMemoryFacts,addMemoryFacts,memoryPrompt,modelInfo,RECOMMENDED_MODELS,isInstallableModel,cleanInstallOutput,installStatusText,
-  imageExtension,safeImageName,writeTempImage} = require('../server');
-const RAG = require('../rag');
+  imageExtension,safeImageName,writeTempImage} = require('../src/server');
+const RAG = require('../src/rag');
 
 test.after(() => {
   fs.rmSync(root, {recursive:true, force:true});

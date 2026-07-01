@@ -29,7 +29,7 @@ test('Edge edits and saves a C++ file through Ace', {skip}, async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'kai-workbench-edge-e2e-'));
   fs.writeFileSync(path.join(root,'sample.cpp'),'int main() { return 0; }\n');
   process.env.SAFE_ROOT=root;
-  const {server}=require('../server');
+  const {server}=require('../src/server');
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 
   const driverPort=9515+Math.floor(Math.random()*1000);

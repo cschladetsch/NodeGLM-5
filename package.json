@@ -2,11 +2,13 @@
   "name": "kai-workbench",
   "version": "1.0.0",
   "description": "Local KaiWorkbench coding agent with filesystem and shell tools",
-  "main": "server.js",
+  "main": "src/server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "SAFE_ROOT=$HOME node server.js",
-    "rag:index": "node rag.js",
+    "start": "node src/server.js",
+    "dev": "SAFE_ROOT=$HOME node src/server.js",
+    "rag:index": "node src/rag.js",
+    "check": "node --check src/server.js && node --check src/rag.js",
+    "build": "npm run check",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {
